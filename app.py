@@ -7,6 +7,7 @@ SUCCESS_FEE = 0.20
 ACTION_FEE_USD = 1.0
 ADMIN_CODE = "0000" 
 
+# הקישור לגיליון (CSV)
 SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vT8RIj327lCnv6-A_4Ofp6XmcMRWHlJCczNjVK-q1ZKXw9N16ltdo9mhDSZ8NT78eD1eoCb5zVE8EkV/pub?output=csv"
 
 def load_data():
@@ -38,23 +39,24 @@ st.title("📈 מערכת ניהול השקעות")
 df = load_data()
 
 if df is not None:
-    # --- שליפת שווי התיק מהגיליון (עמודה G, שורה ראשונה בנתונים) ---
+    # --- שליפת שווי התיק לפי השם המדויק מהתמונה שלך ---
     try:
-        # הקוד מחפש עמודה בשם 'שווי כולל'. וודא שכתבת ככה בדיוק בשיטס.
-        total_portfolio = float(df['שווי כולל'].iloc[0])
+        total_portfolio = float(df['שווי תיק'].iloc[0])
     except:
-        total_portfolio = 100000.0 # ברירת מחדל אם לא מצא
-        st.warning("לא נמצאה עמודת 'שווי כולל' בשיטס, משתמש בברירת מחדל.")
+        total_portfolio = 100000.0
+        st.warning("שים לב: האפליקציה משתמשת בברירת מחדל של 100,000$.")
 
     user_input = st.text_input("הכנס קוד גישה:", type="password")
     
     if user_input:
         if user_input == ADMIN_CODE:
-            st.success(f"🔓 מצב מנהל | שווי תיק בשיטס: ${total_portfolio:,.0f}")
+            st.success(f"🔓 מצב מנהל | שווי תיק מעודכן: ${total_portfolio:,.0f}")
             summary_data = []
             for _, row in df.iterrows():
                 try:
-                    inv, perc, actions = float(row.iloc[2]), float(str(row.iloc[3]).replace('%', '')), int(row.iloc[4])
+                    inv = float(row.iloc[2])
+                    perc = float(str(row.iloc[3]).replace('%', ''))
+                    actions = int(row.iloc[4])
                     m = calculate_metrics(inv, total_portfolio * (perc / 100), actions)
                     summary_data.append({"שם": row.iloc[0], "נטו": f"${m['net_balance']:,.2f}", "רווח $": f"${m['net_profit_usd']:,.2f}", "רווח %": f"{m['profit_percent']:.2f}%"})
                 except: continue
