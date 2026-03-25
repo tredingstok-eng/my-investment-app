@@ -12,7 +12,8 @@ SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vT8RIj327lCnv6-A_4O
 
 def load_data():
     try:
-        df = pd.read_csv(SHEET_URL)
+        # שימוש ב-timestamp כדי להכריח את השרת לא לשמור נתונים ישנים בזיכרון
+        df = pd.read_csv(f"{SHEET_URL}&cache_bust={pd.Timestamp.now().timestamp()}")
         df.columns = df.columns.str.strip()
         return df
     except Exception as e:
@@ -39,18 +40,27 @@ st.title("📈 מערכת ניהול השקעות")
 df = load_data()
 
 if df is not None:
-    # --- שליפת שווי התיק לפי השם המדויק מהתמונה שלך ---
+    # --- ניסיון שליפה הכי עמיד שיש ---
     try:
-        total_portfolio = float(df['שווי תיק'].iloc[0])
+        # דרך 1: לפי שם עמודה
+        if 'שווי תיק' in df.columns:
+            total_portfolio = float(df['שווי תיק'].dropna().iloc[0])
+        # דרך 2: אם השם לא נמצא, קח את העמודה ה-7 (עמודה G בשיטס)
+        else:
+            total_portfolio = float(df.iloc[0, 6]) 
     except:
         total_portfolio = 100000.0
-        st.warning("שים לב: האפליקציה משתמשת בברירת מחדל של 100,000$.")
+        st.warning("המערכת לא הצליחה לקרוא את 'שווי תיק' מהשיטס. מציג ברירת מחדל.")
 
     user_input = st.text_input("הכנס קוד גישה:", type="password")
     
     if user_input:
         if user_input == ADMIN_CODE:
-            st.success(f"🔓 מצב מנהל | שווי תיק מעודכן: ${total_portfolio:,.0f}")
+            st.success(f"🔓 מצב מנהל | שווי תיק בשיטס: ${total_portfolio:,.0f}")
+            # כפתור רענון ידני לאדמין
+            if st.button("רענן נתונים מהשיטס"):
+                st.rerun()
+                
             summary_data = []
             for _, row in df.iterrows():
                 try:
@@ -62,7 +72,9 @@ if df is not None:
                 except: continue
             st.table(pd.DataFrame(summary_data))
         else:
-            user_row = df[df[df.columns[1]].astype(str) == user_input]
+            # זיהוי משתמש לפי עמודה שנייה
+            code_col = df.columns[1]
+            user_row = df[df[code_col].astype(str) == user_input]
             if not user_row.empty:
                 user_data = user_row.iloc[0]
                 st.header(f"שלום, {user_data.iloc[0]}")
@@ -72,3 +84,5 @@ if df is not None:
                 c1.metric("יתרה נטו ($)", f"${m['net_balance']:,.2f}")
                 c2.metric("רווח נטו ($)", f"${m['net_profit_usd']:,.2f}")
                 c3.metric("תשואה", f"{m['profit_percent']:.2f}%")
+            else:
+                st.error("קוד שגוי.")
