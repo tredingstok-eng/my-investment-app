@@ -11,43 +11,45 @@ IB_TOKEN = "837126977366730658372732"
 IB_QUERY = "1489351"
 SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vT8RIj327lCnv6-A_4Ofp6XmcMRWHlJCczNjVK-q1ZKXw9N16ltdo9mhDSZ8NT78eD1eoCb5zVE8EkV/pub?output=csv"
 
-# --- עיצוב ממשק ---
+# --- עיצוב ממשק Elite ---
 st.set_page_config(page_title="RC Capital", page_icon="🏦", layout="wide")
 
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Assistant:wght@300;600&display=swap');
-    * { font-family: 'Assistant', sans-serif; direction: rtl; text-align: right; }
-    .main { background-color: #0b0e11; color: white; }
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
+    * { font-family: 'Assistant', sans-serif; direction: rtl; }
+    .main { background-color: #050505; color: white; }
     
+    /* כפתור התנתקות קטן בצד */
+    .stButton>button { 
+        background-color: transparent; 
+        color: #8b949e; 
+        border: 1px solid #30363d; 
+        border-radius: 20px;
+        padding: 2px 15px;
+        font-size: 12px;
+    }
+    .stButton>button:hover { color: #ff4b4b; border-color: #ff4b4b; }
+
     /* כרטיסי מידע */
-    .metric-container {
-        background-color: #161b22;
-        border-radius: 12px;
-        padding: 20px;
+    .metric-card {
+        background: #0d1117;
         border: 1px solid #30363d;
+        border-radius: 15px;
+        padding: 25px;
         text-align: center;
-        margin-bottom: 10px;
     }
-    .metric-val { font-size: 28px; font-weight: bold; color: #d4af37; }
-    .metric-lbl { font-size: 14px; color: #8b949e; }
-    
-    /* עמלות - עיצוב עדין יותר */
-    .fee-card {
-        background-color: #0d1117;
-        border-right: 4px solid #d4af37;
-        padding: 10px 15px;
-        margin: 5px 0;
-    }
-    
+    .metric-val { font-size: 35px; font-weight: 700; color: #d4af37; margin-bottom: 5px; }
+    .metric-lbl { font-size: 14px; color: #8b949e; text-transform: uppercase; letter-spacing: 1px; }
+
+    /* הסתרת אלמנטים של Streamlit */
+    #MainMenu, footer, header {visibility: hidden;}
+    .block-container {padding-top: 2rem;}
     .modebar { display: none !important; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- מנוע נתונים ---
+# --- פונקציות ---
 def safe_n(v):
     try:
         if pd.isna(v): return 0.0
@@ -70,102 +72,90 @@ def load_all():
         return df, nav
     except: return None, 6131.72
 
-# --- לוגיקת כניסה ---
+# --- לוגיקה ---
 df, total_nav = load_all()
 
 if 'logged_in' not in st.session_state: st.session_state.logged_in = False
 
 if not st.session_state.logged_in:
-    col1, col2, col3 = st.columns([1, 1, 1])
+    # דף כניסה נקי
+    _, col2, _ = st.columns([1, 1, 1])
     with col2:
-        st.markdown("<div style='height:100px;'></div>", unsafe_allow_html=True)
-        st.markdown("<h1 style='text-align:center;'>RC Capital</h1>", unsafe_allow_html=True)
-        pin = st.text_input("קוד גישה:", type="password")
-        if st.button("כניסה"):
+        st.markdown("<div style='height:150px;'></div>", unsafe_allow_html=True)
+        st.markdown("<h1 style='text-align:center; color:#d4af37;'>RC Capital</h1>", unsafe_allow_html=True)
+        pin = st.text_input("PIN", type="password", label_visibility="collapsed")
+        if st.button("LOGIN"):
             if pin == "0000":
                 st.session_state.logged_in, st.session_state.role = True, "admin"
                 st.rerun()
             elif df is not None and str(pin) in df.iloc[:, 1].astype(str).values:
                 st.session_state.logged_in, st.session_state.role, st.session_state.pin = True, "user", str(pin)
                 st.rerun()
-            else: st.error("קוד לא תקין")
+            else: st.error("Access Denied")
 else:
-    # סרגל צד - כפתור התנתקות למטה
-    with st.sidebar:
-        st.markdown("### RC Capital Management")
-        st.write("---")
-        st.write(f"מעודכן ל: {datetime.now().strftime('%d/%m/%Y')}")
-        st.markdown("<br>"*15, unsafe_allow_html=True) # דחיפה למטה
-        if st.button("🚪 התנתק"):
+    # כפתור התנתקות קטן בפינה
+    top_left, top_right = st.columns([9, 1])
+    with top_right:
+        if st.button("Logout"):
             st.session_state.logged_in = False
             st.rerun()
 
     if st.session_state.role == "admin":
-        st.header("ניהול תיקים כללי")
-        st.dataframe(df)
+        st.title("Admin Dashboard")
+        st.table(df.iloc[:, [0, 2, 3]])
     else:
-        # שליפת נתוני משתמש
         user = df[df.iloc[:, 1].astype(str) == st.session_state.pin].iloc[0]
         name, inv, share, acts = user.iloc[0], safe_n(user.iloc[2]), safe_n(user.iloc[3]), safe_n(user.iloc[4])
         
-        # חישובים
-        gross_value = total_nav * (share / 100.0)
-        broker_fees = (acts + 1) * 1.0
-        profit_before_tax = gross_value - inv - broker_fees
+        # חישובי מס ועמלות
+        gross = total_nav * (share / 100.0)
+        broker_costs = (acts + 1) * 1.0
+        profit_raw = gross - inv - broker_costs
         
-        tax = profit_before_tax * 0.25 if profit_before_tax > 0 and name != "רפאל כהן" else 0
-        success_fee = (profit_before_tax - tax) * 0.20 if profit_before_tax > 0 and name != "רפאל כהן" else 0
-        net_val = gross_value - tax - success_fee
+        tax = profit_raw * 0.25 if profit_raw > 0 and name != "רפאל כהן" else 0
+        success_fee = (profit_raw - tax) * 0.20 if profit_raw > 0 and name != "רפאל כהן" else 0
+        net = gross - tax - success_fee
 
-        st.title(f"שלום, {name}")
+        st.markdown(f"<h3>שלום, {name}</h3>", unsafe_allow_html=True)
         
-        # כרטיסים עליונים
+        # כרטיסי מידע רחבים
         c1, c2, c3 = st.columns(3)
         with c1:
-            st.markdown(f"<div class='metric-container'><div class='metric-lbl'>יתרה נטו (USD)</div><div class='metric-val'>${net_val:,.2f}</div></div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='metric-card'><div class='metric-lbl'>יתרה נטו</div><div class='metric-val'>${net:,.2f}</div></div>", unsafe_allow_html=True)
         with c2:
-            profit_net = net_val - inv
-            color = "#00ff88" if profit_net >= 0 else "#ff4b4b"
-            st.markdown(f"<div class='metric-container'><div class='metric-lbl'>רווח/הפסד נקי</div><div class='metric-val' style='color:{color}'>${profit_net:,.2f}</div></div>", unsafe_allow_html=True)
+            p_net = net - inv
+            color = "#00ff88" if p_net >= 0 else "#ff4b4b"
+            st.markdown(f"<div class='metric-card'><div class='metric-lbl'>רווח/הפסד</div><div class='metric-val' style='color:{color}'>${p_net:,.2f}</div></div>", unsafe_allow_html=True)
         with c3:
-            st.markdown(f"<div class='metric-container'><div class='metric-lbl'>תשואה באחוזים</div><div class='metric-val'>{(profit_net/inv*100):.2f}%</div></div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='metric-card'><div class='metric-lbl'>תשואה</div><div class='metric-val'>{(p_net/inv*100):.2f}%</div></div>", unsafe_allow_html=True)
 
-        st.write("---")
-        
-        # גרף צמיחה נקי (ללא זיגזגים)
-        st.subheader("מגמת תיק השקעות")
+        st.write("<br>", unsafe_allow_html=True)
+
+        # גרף הון מרכזי
+        st.subheader("ביצועי תיק")
         dates = [datetime.now() - timedelta(days=30), datetime.now()]
-        points = [inv, net_val]
+        points = [inv, net]
         
         fig = go.Figure()
         fig.add_trace(go.Scatter(
-            x=dates, y=points,
-            mode='lines+markers',
-            line=dict(color='#d4af37', width=4),
-            fill='tozeroy',
-            fillcolor='rgba(212, 175, 55, 0.1)',
-            marker=dict(size=12, color='#d4af37')
+            x=dates, y=points, mode='lines+markers',
+            line=dict(color='#d4af37', width=5),
+            fill='tozeroy', fillcolor='rgba(212, 175, 55, 0.05)',
+            marker=dict(size=12, borderwidth=2, bordercolor='white')
         ))
         fig.update_layout(
             paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-            margin=dict(l=0, r=0, t=20, b=0), height=350,
+            margin=dict(l=0, r=0, t=10, b=0), height=400,
             xaxis=dict(showgrid=False, fixedrange=True),
             yaxis=dict(showgrid=True, gridcolor='#1c2128', side="right", fixedrange=True),
             dragmode=False
         )
         st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
-        # שורת בחירת זמנים (למראה בלבד כרגע)
-        st.columns(5)[2].segmented_control("תקופה", ["1D", "1W", "1M", "1Y", "MAX"], default="1M")
-
-        st.write("---")
-        
-        # פירוט עמלות למטה
-        st.subheader("פירוט עמלות ומיסים")
+        # פירוט עמלות נקי למטה
+        st.write("<br>---", unsafe_allow_html=True)
+        st.subheader("שקיפות עמלות ומיסים")
         f1, f2, f3 = st.columns(3)
-        with f1:
-            st.markdown(f"<div class='fee-card'><b>מס רווח הון (25%):</b><br>${tax:,.2f}</div>", unsafe_allow_html=True)
-        with f2:
-            st.markdown(f"<div class='fee-card'><b>עמלת הצלחה (20%):</b><br>${success_fee:,.2f}</div>", unsafe_allow_html=True)
-        with f3:
-            st.markdown(f"<div class='fee-card'><b>עמלות ברוקר מצטברות:</b><br>${broker_fees:,.2f}</div>", unsafe_allow_html=True)
+        f1.write(f"**מס רווח הון (25%):** ${tax:,.2f}")
+        f2.write(f"**עמלת הצלחה (20%):** ${success_fee:,.2f}")
+        f3.write(f"**עלויות ברוקר:** ${broker_costs:,.2f}")
