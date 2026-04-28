@@ -8,18 +8,25 @@ import time
 # --- הגדרות ליבה ---
 IB_TOKEN = "837126977366730658372732"
 IB_QUERY_ID = "1489351"
-TAX_RATE = 0.25
-SUCCESS_FEE = 0.20
-ACTION_FEE_USD = 1.0
-ADMIN_CODE = "0000"  # הקוד הסודי שלך
+ADMIN_CODE = "0000"
 NO_FEE_USER = "רפאל כהן"
+TAX_RATE, SUCCESS_FEE, ACTION_FEE = 0.25, 0.20, 1.0
 SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vT8RIj327lCnv6-A_4Ofp6XmcMRWHlJCczNjVK-q1ZKXw9N16ltdo9mhDSZ8NT78eD1eoCb5zVE8EkV/pub?output=csv"
 
-# עיצוב דף
-st.set_page_config(page_title="Cohen Investments", page_icon="💎", layout="wide")
+# הגדרות עיצוב גלובליות
+st.set_page_config(page_title="RC Capital", page_icon="📈", layout="wide")
 
-# --- פונקציות עזר ---
-@st.cache_data(ttl=180) # שומר נתונים בזיכרון ל-3 דקות כדי לא להעמיס על IBKR
+# CSS לעיצוב יוקרתי
+st.markdown("""
+    <style>
+    .main { background-color: #0e1117; }
+    .stMetric { background-color: #1e2130; padding: 20px; border-radius: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+    div[data-testid="stExpander"] { border: none !important; box-shadow: none !important; }
+    .stButton>button { width: 100%; border-radius: 10px; background-color: #00ff88; color: black; }
+    </style>
+    """, unsafe_allow_html=True)
+
+@st.cache_data(ttl=120)
 def get_ibkr_value():
     try:
         url = f"https://www.interactivebrokers.com/Universal/servlet/FlexStatementService.SendRequest?t={IB_TOKEN}&q={IB_QUERY_ID}&v=3"
@@ -32,112 +39,93 @@ def get_ibkr_value():
             data_res = requests.get(f"{base_url}?q={code}&t={IB_TOKEN}", timeout=10)
             data_root = ET.fromstring(data_res.content)
             nav = data_root.find(".//NetAssetValue")
-            if nav is not None:
-                return float(nav.get("total"))
-    except:
-        return None
+            if nav is not None: return float(nav.get("total"))
+    except: return None
     return None
 
 def load_data():
-    try:
-        df = pd.read_csv(f"{SHEET_URL}&cb={time.time()}")
-        df.columns = df.columns.str.strip()
-        return df
-    except:
-        return None
+    try: return pd.read_csv(f"{SHEET_URL}&cb={time.time()}")
+    except: return None
 
-def calc_metrics(name, inv, current_gross, acts):
-    fees = (acts + 1) * ACTION_FEE_USD
-    profit_before = current_gross - inv - fees
-    if name == NO_FEE_USER or profit_before <= 0:
-        tax, comm = 0, 0
-    else:
-        tax = profit_before * TAX_RATE
-        comm = (profit_before - tax) * SUCCESS_FEE
-    net = current_gross - tax - comm - (fees if name != NO_FEE_USER else 1.0)
-    return {
-        "net": net, "profit": net - inv, 
-        "perc": ((net - inv) / inv * 100) if inv > 0 else 0,
-        "tax": tax, "comm": comm, "fees": fees, "gross": current_gross
-    }
+def calc_metrics(name, inv, gross, acts):
+    fees = (acts + 1) * ACTION_FEE
+    profit = gross - inv - fees
+    tax, comm = (profit * TAX_RATE, (profit - (profit * TAX_RATE)) * SUCCESS_FEE) if profit > 0 and name != NO_FEE_USER else (0, 0)
+    net = gross - tax - comm - (fees if name != NO_FEE_USER else 1.0)
+    return {"net": net, "profit": net - inv, "perc": (net-inv)/inv*100 if inv>0 else 0, "tax": tax, "comm": comm, "fees": fees, "gross": gross}
 
-# --- ממשק משתמש ---
-st.title("💎 Cohen Investment Fund")
-st.markdown(f"**תאריך עדכון:** {pd.Timestamp.now().strftime('%d/%m/%Y %H:%M')}")
-
+# --- לוגיקת אפליקציה ---
 df = load_data()
-ib_val = get_ibkr_value()
+ib_val = get_ibkr_value() or 6131.0
 
-# סרגל צד
-with st.sidebar:
-    st.header("כניסה למערכת")
-    user_code = st.text_input("קוד אישי:", type="password")
-    if ib_val:
-        st.success(f"מחובר לבורסה: ${ib_val:,.2f}")
-    else:
-        st.error("מתחבר לגיבוי נתונים...")
-        ib_val = 6131.0 # ברירת מחדל אם הכל נכשל
+# מסך כניסה מרכזי
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
 
-if not user_code:
-    st.info("אנא הכנס קוד כדי לצפות בנתונים")
+if not st.session_state.authenticated:
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.image("https://cdn-icons-png.flaticon.com/512/3135/3135706.png", width=100) # אייקון לוגו
+        st.title("RC Capital Management")
+        st.subheader("כניסה למערכת המעקב")
+        pwd = st.text_input("הכנס קוד גישה אישי:", type="password")
+        if st.button("התחבר"):
+            if pwd == ADMIN_CODE or (df is not None and str(pwd) in df.iloc[:, 1].astype(str).values):
+                st.session_state.authenticated = True
+                st.session_state.pwd = pwd
+                st.rerun()
+            else:
+                st.error("קוד שגוי, נסה שוב")
 else:
-    # --- מצב מנהל (רפאל) ---
-    if user_code == ADMIN_CODE:
-        st.subheader("📊 ניהול תיק השקעות כולל")
+    # כפתור התנתקות בפינה
+    if st.sidebar.button("יציאה מהמערכת"):
+        st.session_state.authenticated = False
+        st.rerun()
+
+    # --- תצוגת מנהל ---
+    if st.session_state.pwd == ADMIN_CODE:
+        st.title("💼 לוח בקרה - רפאל כהן")
         total_inv = df.iloc[:, 2].sum()
         
-        c1, c2, c3 = st.columns(3)
-        c1.metric("שווי תיק כולל (IBKR)", f"${ib_val:,.2f}")
-        c2.metric("סך הפקדות לקוחות", f"${total_inv:,.2f}")
-        c3.metric("רווח/הפסד נומינלי", f"${ib_val - total_inv:,.2f}", delta=f"{((ib_val-total_inv)/total_inv*100):.2f}%")
-        
-        st.divider()
-        st.write("### ריכוז לקוחות")
-        summary_list = []
-        for _, row in df.iterrows():
-            m = calc_metrics(row[0], float(row[2]), ib_val * (float(str(row[3]).replace('%',''))/100), int(row[4]))
-            summary_list.append({"לקוח": row[0], "הפקדה": row[2], "נטו": m['net'], "רווח $": m['profit']})
-        st.table(pd.DataFrame(summary_list))
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("שווי תיק (IBKR)", f"${ib_val:,.2f}")
+        c2.metric("סה\"כ הפקדות", f"${total_inv:,.2f}")
+        c3.metric("רווח קרן", f"${ib_val - total_inv:,.2f}", delta=f"{((ib_val-total_inv)/total_inv*100):.2f}%")
+        c4.metric("סטטוס חיבור", "פעיל 🟢")
 
-    # --- מצב לקוח ---
+        st.write("### פירוט לקוחות מלא")
+        summary = []
+        for _, r in df.iterrows():
+            m = calc_metrics(r[0], float(r[2]), ib_val * (float(str(r[3]).replace('%',''))/100), int(r[4]))
+            summary.append([r[0], f"${r[2]:,.0f}", f"${m['net']:,.2f}", f"{m['perc']:.1f}%"])
+        st.table(pd.DataFrame(summary, columns=["לקוח", "הפקדה", "יתרה נטו", "תשואה"]))
+
+    # --- תצוגת לקוח ---
     else:
-        user_row = df[df.iloc[:, 1].astype(str) == user_code]
-        if user_row.empty:
-            st.error("קוד שגוי או משתמש לא קיים")
-        else:
-            data = user_row.iloc[0]
-            name, inv, share_perc, acts = data[0], float(data[2]), float(str(data[3]).replace('%','')), int(data[4])
-            m = calc_metrics(name, inv, ib_val * (share_perc/100), acts)
-            
-            st.header(f"שלום, {name}")
-            
-            # כרטיסי מידע
-            cols = st.columns(4)
-            cols[0].metric("יתרה נטו (למשיכה)", f"${m['net']:,.2f}")
-            cols[1].metric("רווח נקי", f"${m['profit']:,.2f}", delta=f"{m['perc']:.2f}%")
-            cols[2].metric("סך הפקדות", f"${inv:,.0f}")
-            cols[3].metric("נתח בקרן", f"{share_perc}%")
-            
-            st.divider()
-            
-            # גרפים
-            g1, g2 = st.columns(2)
-            with g1:
-                fig = px.bar(x=["הפקדה", "שווי נוכחי (נטו)"], y=[inv, m['net']], 
-                           color=["הפקדה", "נטו"], title="הצמיחה שלך",
-                           color_discrete_sequence=["#636EFA", "#00CC96"])
-                st.plotly_chart(fig, use_container_width=True)
-            with g2:
-                fig2 = px.pie(values=[share_perc, 100-share_perc], names=[f"חלקך", "שאר הקרן"], 
-                            hole=0.5, title="פיזור התיק", color_discrete_sequence=["#EF553B", "#AB63FA"])
-                st.plotly_chart(fig2, use_container_width=True)
-            
-            # פירוט טכני
-            with st.expander("📝 פירוט חשבונאי"):
-                st.write(f"שווי ברוטו בתיק: ${m['gross']:,.2f}")
-                if name == NO_FEE_USER:
-                    st.success("חשבון זה מוגדר כחשבון מנהל (פטור מעמלות)")
-                else:
-                    st.write(f"הפרשה למס (25% מהרווח): ${m['tax']:,.2f}")
-                    st.write(f"עמלת הצלחה (20% מהרווח): ${m['comm']:,.2f}")
-                st.write(f"עמלות קנייה/מכירה מצטברות: ${m['fees']:,.2f}")
+        user_row = df[df.iloc[:, 1].astype(str) == st.session_state.pwd].iloc[0]
+        name, inv, share, acts = user_row[0], float(user_row[2]), float(str(user_row[3]).replace('%','')), int(user_row[4])
+        m = calc_metrics(name, inv, ib_val * (share/100), acts)
+
+        st.title(f"שלום, {name}")
+        st.markdown("---")
+        
+        c1, c2, c3 = st.columns(3)
+        c1.metric("יתרה נטו למשיכה", f"${m['net']:,.2f}")
+        c2.metric("רווח נקי", f"${m['profit']:,.2f}", delta=f"{m['perc']:.2f}%")
+        c3.metric("חלק בתיק", f"{share}%")
+
+        st.write("### ניתוח ביצועים")
+        col_l, col_r = st.columns([2, 1])
+        with col_l:
+            fig = px.area(x=["הפקדה", "היום"], y=[inv, m['net']], title="גרף צמיחה נומינלי",
+                         color_discrete_sequence=['#00ff88'])
+            st.plotly_chart(fig, use_container_width=True)
+        with col_r:
+            fig2 = px.pie(values=[share, 100-share], names=["חלקך", "אחרים"], hole=0.6,
+                        title="פיזור בקרן", color_discrete_sequence=['#00ff88', '#1e2130'])
+            st.plotly_chart(fig2, use_container_width=True)
+
+        with st.expander("🔍 שקיפות ועמלות"):
+            st.write(f"שווי ברוטו: ${m['gross']:,.2f}")
+            st.write(f"עמלת ניהול והצלחה: ${m['comm']+m['tax']:,.2f}")
+            st.caption("החישוב כולל הפרשה למס רווח הון ועמלות פעולה של הברוקר")
