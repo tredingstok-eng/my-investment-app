@@ -1,42 +1,35 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 import requests
 import xml.etree.ElementTree as ET
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
+import numpy as np
 
-# --- הגדרות ---
+# --- הגדרות ליבה ---
 IB_TOKEN = "837126977366730658372732"
 IB_QUERY = "1489351"
 SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vT8RIj327lCnv6-A_4Ofp6XmcMRWHlJCczNjVK-q1ZKXw9N16ltdo9mhDSZ8NT78eD1eoCb5zVE8EkV/pub?output=csv"
 
-# --- עיצוב דף ---
-st.set_page_config(page_title="RC Capital", page_icon="💰", layout="wide")
+# --- עיצוב דף (Clean Fintech Look) ---
+st.set_page_config(page_title="RC Capital", page_icon="📈", layout="wide")
 
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Assistant:wght@300;600&display=swap');
     * { font-family: 'Assistant', sans-serif; direction: rtl; }
-    .main { background-color: #0e1117; }
-    /* כרטיסי נתונים */
-    .metric-card {
-        background-color: #161b22;
-        border: 1px solid #30363d;
-        border-radius: 12px;
-        padding: 20px;
-        text-align: center;
-        box-shadow: 2px 2px 10px rgba(0,0,0,0.5);
-    }
-    .metric-label { color: #8b949e; font-size: 16px; margin-bottom: 10px; }
-    .metric-value { color: #d4af37; font-size: 32px; font-weight: bold; }
-    /* הסרת ה-Toolbar של Plotly */
+    .main { background-color: #0b0e11; }
+    .stMetric { background-color: #161b22; border-radius: 12px; padding: 15px; border: 1px solid #30363d; }
+    /* הסתרת כל מה שמיותר */
     .modebar { display: none !important; }
+    [data-testid="stHeader"] { background: rgba(0,0,0,0); }
+    .stButton>button { background-color: #1c2128; color: #adbac7; border: 1px solid #444c56; border-radius: 6px; }
+    .stButton>button:active, .stButton>button:focus { border-color: #d4af37; color: #d4af37; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- פונקציות ---
+# --- פונקציות נתונים ---
 def safe_n(v):
     try:
         if pd.isna(v): return 0.0
@@ -59,106 +52,115 @@ def load_data():
         return df, nav
     except: return None, 6131.72
 
-def calc_all(name, inv, share, acts, total_nav):
-    gross = total_nav * (share / 100.0)
-    fees = (acts + 1) * 1.0
-    profit = gross - inv - fees
-    tax, mgt = (profit * 0.25, (profit * 0.75) * 0.20) if profit > 0 and name != "רפאל כהן" else (0, 0)
-    net = gross - tax - mgt - (fees if name != "רפאל כהן" else 0)
-    return {"net": net, "profit": net - inv, "perc": (net-inv)/inv*100 if inv>0 else 0}
+def get_history_data(current_val, days=30):
+    """ייצור נתונים היסטוריים מדומים לצורך הגרף (עד שיהיה בסיס נתונים)"""
+    dates = [datetime.now() - timedelta(days=x) for x in range(days)]
+    dates.reverse()
+    # מייצר תנודה אקראית סביב הערך הנוכחי
+    values = [current_val * (1 + np.random.uniform(-0.02, 0.02)) for _ in range(days-1)]
+    values.append(current_val)
+    return dates, values
 
-# --- אפליקציה ---
+# --- לוגיקה ---
 df, total_nav = load_data()
 
 if 'logged_in' not in st.session_state: st.session_state.logged_in = False
 
 if not st.session_state.logged_in:
-    st.markdown("<br><br>", unsafe_allow_html=True)
-    col1, col2, col3 = st.columns([1, 1.5, 1])
+    col1, col2, col3 = st.columns([1, 1, 1])
     with col2:
-        st.markdown("<div style='text-align:center;'>", unsafe_allow_html=True)
-        st.title("🏦 כניסה ל-RC Capital")
-        pin = st.text_input("הזן קוד זיהוי אישי:", type="password")
-        if st.button("התחבר"):
+        st.markdown("<div style='text-align:center; padding-top:100px;'>", unsafe_allow_html=True)
+        st.title("🏦 RC Capital")
+        pin = st.text_input("קוד גישה:", type="password")
+        if st.button("כניסה"):
             if pin == "0000":
                 st.session_state.logged_in, st.session_state.admin = True, True
                 st.rerun()
             elif df is not None and str(pin) in df.iloc[:, 1].astype(str).values:
                 st.session_state.logged_in, st.session_state.admin, st.session_state.user_pin = True, False, str(pin)
                 st.rerun()
-            else: st.error("קוד שגוי")
+            else: st.error("קוד לא מזוהה")
         st.markdown("</div>", unsafe_allow_html=True)
-
 else:
-    # סרגל צד
-    with st.sidebar:
-        st.title("RC Capital")
-        st.write(f"שווי תיק כולל: **${total_nav:,.2f}**")
-        st.write("---")
-        # בחירת תקופה
-        time_period = st.radio("בחר תקופת תצוגה:", ["חודש", "רבעון", "שנה", "הכל"], index=3)
-        if st.button("התנתק"):
-            st.session_state.logged_in = False
-            st.rerun()
+    if st.sidebar.button("התנתק"):
+        st.session_state.logged_in = False
+        st.rerun()
 
     if st.session_state.admin:
-        st.header("ניהול תיק השקעות")
-        st.dataframe(df.iloc[:, [0, 2, 3]], use_container_width=True)
+        st.header("ניהול מערכת")
+        st.dataframe(df)
     else:
         user = df[df.iloc[:, 1].astype(str) == st.session_state.user_pin].iloc[0]
         name, inv, share, acts = user.iloc[0], safe_n(user.iloc[2]), safe_n(user.iloc[3]), safe_n(user.iloc[4])
-        m = calc_all(name, inv, share, acts, total_nav)
+        
+        # חישובי רווח
+        gross = total_nav * (share / 100.0)
+        profit = gross - inv - ((acts+1)*1.0)
+        net = gross - (profit*0.25 if profit > 0 else 0) # חישוב מס בסיסי בתצוגה
 
         st.title(f"שלום, {name}")
-        st.markdown("---")
-
-        # כרטיסים נקיים
+        
+        # מטריקות ראשיות
         c1, c2, c3 = st.columns(3)
-        with c1:
-            st.markdown(f"<div class='metric-card'><div class='metric-label'>יתרה נטו (דולר)</div><div class='metric-value'>${m['net']:,.2f}</div></div>", unsafe_allow_html=True)
-        with c2:
-            color = "#00ff88" if m['profit'] >= 0 else "#ff4b4b"
-            st.markdown(f"<div class='metric-card'><div class='metric-label'>רווח/הפסד נקי</div><div class='metric-value' style='color:{color}'>${m['profit']:,.2f}</div></div>", unsafe_allow_html=True)
-        with c3:
-            st.markdown(f"<div class='metric-card'><div class='metric-label'>אחוז תשואה</div><div class='metric-value'>{m['perc']:.2f}%</div></div>", unsafe_allow_html=True)
+        c1.metric("שווי נטו", f"${net:,.2f}")
+        c2.metric("רווח/הפסד", f"${profit:,.2f}", delta=f"{(profit/inv*100):.2f}%")
+        c3.metric("נתח בקרן", f"{share}%")
 
+        st.markdown("---")
+        
+        # כפתורי בחירת זמן
+        t_col1, t_col2 = st.columns([2, 1])
+        with t_col1:
+            period = st.radio("", ["יום", "שבוע", "חודש", "שנה", "MAX"], horizontal=True, label_visibility="collapsed")
+        
+        days_map = {"יום": 2, "שבוע": 7, "חודש": 30, "שנה": 365, "MAX": 500}
+        dates, vals = get_history_data(net, days_map[period])
+
+        # הגרף המרכזי - קווי ונקי
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=dates, y=vals,
+            mode='lines',
+            line=dict(color='#d4af37', width=3),
+            fill='tozeroy',
+            fillcolor='rgba(212, 175, 55, 0.1)',
+            hovertemplate='<b>שווי:</b> $%{y:,.2f}<extra></extra>'
+        ))
+
+        fig.update_layout(
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            margin=dict(l=0, r=0, t=10, b=0),
+            height=400,
+            xaxis=dict(showgrid=False, color='#444', fixedrange=True),
+            yaxis=dict(showgrid=True, gridcolor='#1c2128', color='#444', side="right", fixedrange=True),
+            dragmode=False
+        )
+        
+        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+
+        # גרף אחוזים (רווח מצטבר)
         st.markdown("<br>", unsafe_allow_html=True)
+        st.subheader("תשואה באחוזים")
         
-        # גרפים יציבים (ללא תזוזה)
-        col_g1, col_g2 = st.columns(2)
+        # המרה של הערכים לאחוזים יחסיים להפקדה
+        perc_vals = [(v - inv) / inv * 100 for v in vals]
         
-        with col_g1:
-            st.subheader("גרף הון (בכסף)")
-            fig_money = go.Figure(go.Bar(
-                x=["הפקדה", "יתרה נוכחית"],
-                y=[inv, m['net']],
-                marker_color=['#30363d', '#d4af37'],
-                text=[f"${inv:,.0f}", f"${m['net']:,.0f}"],
-                textposition='auto',
-            ))
-            fig_money.update_layout(
-                paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-                font_color="white", height=350, margin=dict(l=20, r=20, t=20, b=20),
-                dragmode=False, # מבטל הזזה
-                xaxis=dict(fixedrange=True), # מבטל Zoom
-                yaxis=dict(fixedrange=True)
-            )
-            st.plotly_chart(fig_money, use_container_width=True, config={'displayModeBar': False})
-
-        with col_g2:
-            st.subheader("גרף ביצועים (באחוזים)")
-            # גרף פאי פשוט שלא זז
-            fig_perc = px.pie(
-                values=[share, 100-share],
-                names=["החלק שלך", "שאר התיק"],
-                hole=0.5,
-                color_discrete_sequence=['#d4af37', '#161b22']
-            )
-            fig_perc.update_layout(
-                paper_bgcolor='rgba(0,0,0,0)', font_color="white",
-                height=350, showlegend=False,
-                dragmode=False
-            )
-            st.plotly_chart(fig_perc, use_container_width=True, config={'displayModeBar': False})
-
-        st.info(f"הנתונים מוצגים עבור תקופה: {time_period}")
+        fig_perc = go.Figure()
+        fig_perc.add_trace(go.Scatter(
+            x=dates, y=perc_vals,
+            mode='lines',
+            line=dict(color='#00ff88' if profit >= 0 else '#ff4b4b', width=2),
+            hovertemplate='<b>תשואה:</b> %{y:.2f}%<extra></extra>'
+        ))
+        
+        fig_perc.update_layout(
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            margin=dict(l=0, r=0, t=10, b=0),
+            height=250,
+            xaxis=dict(showgrid=False, visible=False, fixedrange=True),
+            yaxis=dict(showgrid=True, gridcolor='#1c2128', side="right", fixedrange=True),
+            dragmode=False
+        )
+        st.plotly_chart(fig_perc, use_container_width=True, config={'displayModeBar': False})
