@@ -14,7 +14,7 @@ SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vT8RIj327lCnv6-A_4O
 
 st.set_page_config(page_title="RC Capital", page_icon="🏦", layout="wide")
 
-# עיצוב ממשק
+# עיצוב UI
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Assistant:wght@300;600&display=swap');
@@ -22,80 +22,92 @@ st.markdown("""
     .main { background-color: #050505; color: white; }
     #MainMenu, footer, header {visibility: hidden;}
     .stMetric { background-color: #0d1117; border: 1px solid #30363d; border-radius: 15px; padding: 15px; }
-    .update-tag { background-color: #d4af37; color: black; padding: 4px 12px; border-radius: 10px; font-weight: bold; font-size: 12px; }
+    .update-tag { background-color: #d4af37; color: black; padding: 4px 12px; border-radius: 8px; font-weight: bold; font-size: 13px; }
     </style>
     """, unsafe_allow_html=True)
 
-# פונקציית משיכה אגרסיבית (No Cache)
-def get_live_market_data():
-    t_stamp = str(int(time.time()))
-    # 1. משיכת הגיליון
+def get_ibkr_nav():
+    """משיכה אגרסיבית של שווי התיק מאינטראקטיב"""
     try:
-        df = pd.read_csv(f"{SHEET_URL}&cb={t_stamp}")
-    except:
-        df = None
-
-    # 2. משיכת נתונים מאינטראקטיב (IBKR)
-    current_nav = 0.0
-    try:
-        # שליחת בקשה ראשונה לקבלת קוד גישה לדו"ח
+        # שלב א: בקשת הדו"ח
         base_url = "https://www.interactivebrokers.com/Universal/servlet/FlexStatementService.SendRequest"
-        r = requests.get(f"{base_url}?t={IB_TOKEN}&q={IB_QUERY}&v=3", timeout=10)
+        r = requests.get(f"{base_url}?t={IB_TOKEN}&q={IB_QUERY}&v=3", timeout=15)
         root = ET.fromstring(r.content)
         
         if root.find("Status").text == "Success":
             code = root.find('ReferenceCode').text
             url = root.find('Url').text
             
-            # המתנה קצרה כדי לוודא שהדו"ח מוכן בשרת של IB
-            time.sleep(1.5)
-            
-            # בקשת הנתונים עצמם
-            data_r = requests.get(f"{url}?q={code}&t={IB_TOKEN}", timeout=10)
-            data_root = ET.fromstring(data_r.content)
-            
-            # חיפוש ה-Net Asset Value (NAV) הכולל
-            nav_element = data_root.find(".//NetAssetValue")
-            if nav_element is not None:
-                current_nav = float(nav_element.get("total"))
-    except Exception as e:
-        st.sidebar.error(f"שגיאת תקשורת עם IB: {e}")
-        current_nav = 6131.72 # ערך גיבוי אם הברוקר לא עונה
-        
-    return df, current_nav
+            # שלב ב: ניסיונות משיכה (Retry loop) - השרת של IB איטי
+            for attempt in range(3):
+                time.sleep(2.5) # המתנה משמעותית בין ניסיון לניסיון
+                data_r = requests.get(f"{url}?q={code}&t={IB_TOKEN}", timeout=15)
+                
+                # בדיקה אם קיבלנו XML תקין או הודעת "קובץ לא מוכן"
+                if b"NetAssetValue" in data_r.content:
+                    data_root = ET.fromstring(data_r.content)
+                    # מחפש את ה-NAV בכל מקום אפשרי ב-XML
+                    nav_elements = data_root.findall(".//NetAssetValue")
+                    for elem in nav_elements:
+                        # אנחנו מחפשים את השורה של ה-Total (לפעמים יש פירוט לפי מטבעות)
+                        total = elem.get("total")
+                        if total and float(total) > 0:
+                            return float(total)
+        return None
+    except:
+        return None
 
-# ניהול ה-Session
+def fetch_all_data():
+    """טעינת כל המקורות יחד"""
+    t_stamp = str(int(time.time()))
+    # טעינת גוגל
+    try:
+        df = pd.read_csv(f"{SHEET_URL}&cb={t_stamp}")
+    except:
+        df = None
+    
+    # טעינת IBKR
+    nav = get_ibkr_nav()
+    return df, nav
+
+# ניהול הזיכרון (Session State)
 if 'auth' not in st.session_state: st.session_state.auth = False
-if 'data_package' not in st.session_state: st.session_state.data_package = None
+if 'df' not in st.session_state: st.session_state.df = None
+if 'total_nav' not in st.session_state: st.session_state.total_nav = 6131.72 # ערך מחדל
 
 # טעינה ראשונית
-if st.session_state.data_package is None:
-    st.session_state.data_package = get_live_market_data()
+if st.session_state.df is None:
+    df_new, nav_new = fetch_all_data()
+    st.session_state.df = df_new
+    if nav_new: st.session_state.total_nav = nav_new
 
-# כניסה למערכת
+# דף כניסה
 if not st.session_state.auth:
     _, col, _ = st.columns([1, 1, 1])
     with col:
         st.markdown("<br><br><h1 style='text-align:center;'>RC Capital</h1>", unsafe_allow_html=True)
-        pin = st.text_input("הכנס PIN", type="password")
-        if st.button("כניסה"):
-            df_check = st.session_state.data_package[0]
+        pin = st.text_input("PIN Code", type="password")
+        if st.button("כניסה למערכת"):
             if pin == "0000": 
                 st.session_state.auth, st.session_state.role = True, "admin"
                 st.rerun()
-            elif df_check is not None and str(pin) in df_check.iloc[:, 1].astype(str).values:
+            elif st.session_state.df is not None and str(pin) in st.session_state.df.iloc[:, 1].astype(str).values:
                 st.session_state.auth, st.session_state.role, st.session_state.pin = True, "user", str(pin)
                 st.rerun()
-            else: st.error("קוד שגוי")
+            else: st.error("קוד לא תקין")
 else:
-    # תפריט צד
+    # Sidebar
     with st.sidebar:
-        st.title("RC Control")
-        if st.button("🔄 רענון נתונים מ-IBKR"):
-            with st.spinner("מושך נתונים חיים מהבורסה..."):
-                st.session_state.data_package = get_live_market_data()
-                st.success("הנתונים עודכנו בהצלחה!")
-                time.sleep(1)
+        st.subheader("ניהול חשבון")
+        if st.button("🔄 רענון נתונים חי"):
+            with st.spinner("מתחבר לבורסה..."):
+                df_new, nav_new = fetch_all_data()
+                if df_new is not None: st.session_state.df = df_new
+                if nav_new and nav_new > 0: 
+                    st.session_state.total_nav = nav_new
+                    st.success("סונכרן בהצלחה")
+                else:
+                    st.warning("IBKR לא החזיר נתונים, שומר נתח אחרון")
                 st.rerun()
         
         if st.button("🚪 התנתק"):
@@ -103,47 +115,47 @@ else:
             st.rerun()
         
         st.write("---")
-        st.write(f"שווי תיק כולל ב-IB:")
-        st.code(f"${st.session_state.data_package[1]:,.2f}")
-
-    df, total_nav = st.session_state.data_package
+        st.write("שווי תיק ברוקר:")
+        st.markdown(f"### ${st.session_state.total_nav:,.2f}")
 
     if st.session_state.role == "user":
-        user_data = df[df.iloc[:, 1].astype(str) == st.session_state.pin].iloc[0]
-        name = user_data.iloc[0]
-        investment = float(str(user_data.iloc[2]).replace('$', '').replace(',', ''))
-        share_pct = float(str(user_data.iloc[3]).replace('%', ''))
-        commissions = float(user_data.iloc[4])
-
-        # חישוב הערך היחסי לפי הנתון החי מ-IBKR
-        user_gross = total_nav * (share_pct / 100.0)
+        # חילוץ נתוני משתמש
+        df = st.session_state.df
+        user_row = df[df.iloc[:, 1].astype(str) == st.session_state.pin].iloc[0]
         
-        # חישוב רווח ועמלות
-        raw_profit = user_gross - investment - ((commissions + 1) * 1.0)
-        tax = raw_profit * 0.25 if raw_profit > 0 and "רפאל" not in name else 0
-        perf_fee = (raw_profit - tax) * 0.20 if raw_profit > 0 and "רפאל" not in name else 0
-        user_net = user_gross - tax - perf_fee
+        name = user_row.iloc[0]
+        inv = float(str(user_row.iloc[2]).replace('$', '').replace(',', ''))
+        share = float(str(user_row.iloc[3]).replace('%', ''))
+        acts = float(user_row.iloc[4])
+        
+        # חישובים מבוססי IBKR NAV
+        gross = st.session_state.total_nav * (share / 100.0)
+        profit_raw = gross - inv - ((acts + 1) * 1.0)
+        
+        # חישוב מס ועמלה (רק אם זה לא רפאל)
+        tax = profit_raw * 0.25 if profit_raw > 0 and "רפאל" not in name else 0
+        fee = (profit_raw - tax) * 0.20 if profit_raw > 0 and "רפאל" not in name else 0
+        net_value = gross - tax - fee
 
-        # זמן ישראל
         tz = pytz.timezone('Asia/Jerusalem')
-        update_time = datetime.now(tz).strftime('%H:%M:%S | %d/%m/%Y')
+        now = datetime.now(tz).strftime('%H:%M:%S | %d/%m/%Y')
 
         st.title(f"שלום, {name}")
-        st.markdown(f"<span class='update-tag'>סונכרן עם Interactive Brokers: {update_time}</span>", unsafe_allow_html=True)
+        st.markdown(f"<span class='update-tag'>סנכרון IBKR אחרון: {now}</span>", unsafe_allow_html=True)
         st.write("<br>", unsafe_allow_html=True)
 
         c1, c2, c3 = st.columns(3)
-        c1.metric("יתרה נוכחית (Net)", f"${user_net:,.2f}")
-        c2.metric("רווח/הפסד כולל", f"${(user_net - investment):,.2f}", delta=f"{((user_net-investment)/investment*100):.2f}%")
-        c3.metric("אחוז בקרן", f"{share_pct}%")
+        c1.metric("יתרה נטו", f"${net_value:,.2f}")
+        c2.metric("רווח/הפסד", f"${(net_value-inv):,.2f}", delta=f"{((net_value-inv)/inv*100):.2f}%")
+        c3.metric("אחוז בקרן", f"{share}%")
 
-        # גרף ביצועים
+        # גרף
         st.write("<br>", unsafe_allow_html=True)
         fig = go.Figure()
         fig.add_trace(go.Scatter(
-            x=["הפקדה", "מצב נוכחי"], y=[investment, user_net],
+            x=["הפקדה", "נוכחי"], y=[inv, net_value],
             mode='lines+markers+text',
-            text=[f"${investment:,.0f}", f"${user_net:,.2f}"], textposition="top center",
+            text=[f"${inv:,.0f}", f"${net_value:,.0f}"], textposition="top center",
             line=dict(color='#d4af37', width=5),
             marker=dict(size=12, color='#d4af37')
         ))
@@ -154,10 +166,6 @@ else:
             dragmode=False
         )
         st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
-
-        st.write("---")
-        st.subheader("פירוט שקיפות")
-        st.info(f"הנתונים נמשכו ישירות מחשבון ה-Interactive Brokers שלך. שווי התיק הכולל בבורסה כרגע: **${total_nav:,.2f}**")
     else:
-        st.title("Admin Dashboard")
-        st.dataframe(df)
+        st.title("ניהול")
+        st.table(st.session_state.df)
