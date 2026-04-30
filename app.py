@@ -5,9 +5,9 @@ import requests
 import xml.etree.ElementTree as ET
 import time
 
-# --- הגדרות ליבה ---
+# --- הגדרות מעודכנות לפי התמונות שלך ---
 IB_TOKEN = "837126977366730658372732"
-IB_QUERY = "1489351"
+IB_QUERY = "1492787"  # ה-ID החדש מהתמונה שלך
 SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vT8RIj327lCnv6-A_4Ofp6XmcMRWHlJCczNjVK-q1ZKXw9N16ltdo9mhDSZ8NT78eD1eoCb5zVE8EkV/pub?output=csv"
 
 st.set_page_config(page_title="RC Capital", layout="wide")
@@ -22,79 +22,99 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-def fetch_ibkr_safe():
-    """מנגנון משיכה עקשן עם הגנת 'נתון חלקי'"""
+def fetch_ibkr_final():
+    """משיכת נתונים עם התאמה ל-NAV in Base"""
     try:
+        # שלב 1: שליחת הבקשה
         r = requests.get(f"https://www.interactivebrokers.com/Universal/servlet/FlexStatementService.SendRequest?t={IB_TOKEN}&q={IB_QUERY}&v=3", timeout=15)
         root = ET.fromstring(r.content)
+        
         if root.find("Status").text == "Success":
-            url, code = root.find('Url').text, root.find('ReferenceCode').text
-            for _ in range(6): # 6 ניסיונות של 5 שניות
+            url = root.find('Url').text
+            code = root.find('ReferenceCode').text
+            
+            # שלב 2: המתנה לקובץ (6 ניסיונות)
+            for _ in range(6):
                 time.sleep(5)
                 res = requests.get(f"{url}?q={code}&t={IB_TOKEN}", timeout=15)
-                if b"NetAssetValue" in res.content:
+                
+                # בדיקה אם ה-XML מכיל נתוני NAV
+                if b"NetAssetValue" in res.content or b"NAVInBase" in res.content:
                     d_root = ET.fromstring(res.content)
-                    navs = [float(n.get("total")) for n in d_root.findall(".//NetAssetValue") if n.get("total")]
-                    if navs:
-                        candidate = max(navs)
-                        # הגנה: אם הנתון החדש נמוך משמעותית מהקיים, נחשוד שהוא חלקי ונפסול אותו
-                        if 'total_nav' in st.session_state and candidate < (st.session_state.total_nav * 0.7):
-                            continue 
-                        return candidate
+                    
+                    # מחפש את הערך הגבוה ביותר בדו"ח (בדרך כלל ה-Total NAV)
+                    all_values = []
+                    for nav in d_root.findall(".//NetAssetValue"):
+                        val = nav.get("total")
+                        if val: all_values.append(float(val))
+                    
+                    # אם השתמשת ב-NAV in Base, ייתכן שהשדה נקרא אחרת ב-XML
+                    for nav in d_root.findall(".//NavInBase"):
+                        val = nav.get("total")
+                        if val: all_values.append(float(val))
+                        
+                    if all_values:
+                        found_nav = max(all_values)
+                        # הגנה: אם המספר קטן מדי (טעות טעינה), נתעלם
+                        if found_nav > 1000:
+                            return found_nav
         return None
-    except: return None
+    except Exception as e:
+        return None
 
-# ניהול זיכרון המערכת
+# זיכרון אפליקציה
 if 'auth' not in st.session_state: st.session_state.auth = False
 if 'total_nav' not in st.session_state: st.session_state.total_nav = 6131.72
 if 'df' not in st.session_state: st.session_state.df = None
 
-def refresh_data():
-    # גוגל שיטס
+def refresh():
     try: st.session_state.df = pd.read_csv(f"{SHEET_URL}&cb={time.time()}")
     except: pass
-    # אינטראקטיב
-    new_nav = fetch_ibkr_safe()
-    if new_nav: st.session_state.total_nav = new_nav
+    
+    new_val = fetch_ibkr_final()
+    if new_val:
+        st.session_state.total_nav = new_val
 
-if st.session_state.df is None: refresh_data()
+if st.session_state.df is None:
+    refresh()
 
-# --- כניסה ---
+# --- ממשק כניסה ---
 if not st.session_state.auth:
     _, col, _ = st.columns([1, 1, 1])
     with col:
         st.title("RC Capital")
-        pin = st.text_input("PIN", type="password")
-        if st.button("LOGIN"):
-            if pin == "0000": st.session_state.auth, st.session_state.role = True, "admin"
+        pin = st.text_input("קוד PIN", type="password")
+        if st.button("כניסה"):
+            if pin == "0000": 
+                st.session_state.auth, st.session_state.role = True, "admin"
+                st.rerun()
             elif st.session_state.df is not None and str(pin) in st.session_state.df.iloc[:, 1].astype(str).values:
                 st.session_state.auth, st.session_state.role, st.session_state.pin = True, "user", str(pin)
-            st.rerun()
+                st.rerun()
+            else: st.error("PIN שגוי")
 else:
     # --- דאשבורד ---
     with st.sidebar:
-        if st.button("🔄 רענון נתונים חי"):
-            with st.spinner("מתחבר לבורסה..."):
-                refresh_data()
+        if st.button("🔄 רענון נתונים"):
+            with st.spinner("מתחבר לאינטראקטיב..."):
+                refresh()
             st.rerun()
         st.write("---")
-        st.write("שווי תיק ברוקר:")
+        st.write("שווי תיק כולל:")
         st.subheader(f"${st.session_state.total_nav:,.2f}")
-        if st.button("Logout"):
+        if st.button("התנתק"):
             st.session_state.auth = False
             st.rerun()
 
     if st.session_state.role == "user":
-        user = st.session_state.df[st.session_state.df.iloc[:, 1].astype(str) == st.session_state.pin].iloc[0]
-        name, inv = user.iloc[0], float(str(user.iloc[2]).replace('$', '').replace(',', ''))
-        share = float(str(user.iloc[3]).replace('%', ''))
+        user_data = st.session_state.df[st.session_state.df.iloc[:, 1].astype(str) == st.session_state.pin].iloc[0]
+        name = user_data.iloc[0]
+        inv = float(str(user_data.iloc[2]).replace('$', '').replace(',', ''))
+        share = float(str(user_data.iloc[3]).replace('%', ''))
         
-        # חישוב יחסי לשווי התיק העדכני
-        current_nav = st.session_state.total_nav
-        u_gross = current_nav * (share / 100.0)
+        # חישוב
+        u_gross = st.session_state.total_nav * (share / 100.0)
         profit = u_gross - inv
-        
-        # מיסוי (פטור לרפאל)
         tax = profit * 0.25 if profit > 0 and "רפאל" not in name else 0
         u_net = u_gross - tax
 
@@ -104,8 +124,8 @@ else:
         c2.metric("רווח/הפסד", f"${(u_net-inv):,.2f}", delta=f"{((u_net-inv)/inv*100):.2f}%")
         c3.metric("נתח בתיק", f"{share}%")
 
-        fig = go.Figure(go.Scatter(x=["הפקדה", "נוכחי"], y=[inv, u_net], mode='lines+markers+text', 
+        fig = go.Figure(go.Scatter(x=["הפקדה", "היום"], y=[inv, u_net], mode='lines+markers+text', 
                                    text=[f"${inv:,.0f}", f"${u_net:,.0f}"], textposition="top center",
                                    line=dict(color='#d4af37', width=4)))
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', height=350)
+        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', height=400)
         st.plotly_chart(fig, use_container_width=True)
