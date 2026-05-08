@@ -7,66 +7,67 @@ import time
 # --- הגדרות ---
 IB_TOKEN = "837126977366730658372732"
 IB_QUERY = "1492787" 
-SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vT8RIj327lCnv6-A_4Ofp6XmcMRWHlJCczNjVK-q1ZKXw9N16ltdo9mhDSZ8NT78eD1eoCb5zVE8EkV/pub?output=csv"
 
-st.set_page_config(page_title="Debug Mode", layout="wide")
+st.set_page_config(page_title="IBKR Debugger", layout="wide")
 st.markdown("<style> * { direction: rtl; text-align: right; } </style>", unsafe_allow_html=True)
 
-if 'total_nav' not in st.session_state: 
-    st.session_state.total_nav = 6131.72
+# משתני זיכרון שלא נמחקים ברענון
+if 'error_log' not in st.session_state: st.session_state.error_log = ""
+if 'debug_status' not in st.session_state: st.session_state.debug_status = "מוכן לבדיקה"
 
-def debug_fetch():
+def run_capture_debug():
+    st.session_state.error_log = "" # איפוס לוג
     try:
-        st.write("📡 שולח בקשה לאינטראקטיב...")
-        # שימוש ב-Timeout כדי למנוע תקיעה
+        st.session_state.debug_status = "שולח בקשה ראשונה ל-IBKR..."
         r = requests.get(f"https://www.interactivebrokers.com/Universal/servlet/FlexStatementService.SendRequest?t={IB_TOKEN}&q={IB_QUERY}&v=3", timeout=15)
         
+        if r.status_code != 200:
+            st.session_state.error_log = f"שגיאת שרת (HTTP {r.status_code}): {r.text}"
+            return
+
         if "ErrorCode" in r.text:
-            st.error(f"שגיאה מאינטראקטיב: {r.text}")
-            return None
-            
+            st.session_state.error_log = f"אינטראקטיב החזיר קוד שגיאה: {r.text}"
+            return
+
         root = ET.fromstring(r.content)
-        status_elem = root.find("Status")
+        status = root.find("Status").text if root.find("Status") is not None else "Unknown"
         
-        if status_elem is not None and status_elem.text == "Success":
+        if status == "Success":
             code = root.find('ReferenceCode').text
             url = root.find('Url').text
-            st.info(f"הבקשה הצליחה. קוד: {code}. מחכה 12 שניות לייצור הקובץ...")
+            st.session_state.debug_status = f"הבקשה התקבלה (קוד {code}). מחכה לקובץ..."
             
+            # בדיקה אם הקובץ מוכן
             time.sleep(12)
             res = requests.get(f"{url}?q={code}&t={IB_TOKEN}", timeout=15)
             
             if b"NetAssetValue" in res.content:
-                d_root = ET.fromstring(res.content)
-                navs = [float(n.get("total")) for n in d_root.findall(".//NetAssetValue") if n.get("total")]
-                if navs:
-                    new_val = max(navs)
-                    st.success(f"הצלחתי! המספר המעודכן הוא: ${new_val:,.2f}")
-                    return new_val
-                else:
-                    st.warning("הקובץ התקבל אבל לא נמצאו נתוני NAV בתוכו. וודא שב-Flex Query סימנת את סעיף Net Asset Value.")
+                st.session_state.debug_status = "הקובץ התקבל בהצלחה!"
+                st.balloons()
             else:
-                st.error("התקבל קובץ ריק או לא תקין מאינטראקטיב.")
+                st.session_state.error_log = f"התקבל קובץ, אבל הוא לא מכיל נתוני NAV. תוכן: {res.text[:500]}"
         else:
-            st.error(f"אינטראקטיב החזיר סטטוס שגיאה: {r.text}")
+            st.session_state.error_log = f"סטטוס לא תקין ב-XML: {r.text}"
+
     except Exception as e:
-        st.error(f"שגיאה טכנית: {str(e)}")
-    return None
+        st.session_state.error_log = f"שגיאת קוד (Crash): {str(e)}"
 
-st.title("מערכת בדיקת סנכרון IBKR")
+st.title("מערכת אבחון תקלות IBKR")
 
-if st.button("בצע בדיקה עכשיו"):
-    val = debug_fetch()
-    if val:
-        st.session_state.total_nav = val
-    st.rerun()
+if st.button("הפעל בדיקה ותפוס שגיאה"):
+    run_capture_debug()
 
 st.write("---")
-st.header(f"המספר השמור כרגע: ${st.session_state.total_nav:,.2f}")
 
-if st.checkbox("הצג נתונים מגוגל שיטס (לוודא חיבור)"):
-    try:
-        df = pd.read_csv(f"{SHEET_URL}&cb={time.time()}")
-        st.dataframe(df)
-    except:
-        st.error("לא מצליח להתחבר לגוגל שיטס")
+# הצגת סטטוס
+st.subheader("סטטוס נוכחי:")
+st.info(st.session_state.debug_status)
+
+# הצגת שגיאה (אם קיימת - היא לא תיעלם!)
+if st.session_state.error_log:
+    st.subheader("⚠️ השגיאה שנתפסה:")
+    st.error(st.session_state.error_log)
+    st.warning("אם השגיאה היא 'ErrorCode: 1019', זה אומר שצריך לחכות 3 דקות בין לחיצה ללחיצה.")
+
+st.write("---")
+st.write("גרסת אבחון 1.1 - השגיאה תישאר על המסך עד ללחיצה הבאה.")
