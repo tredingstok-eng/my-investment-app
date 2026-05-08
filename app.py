@@ -4,43 +4,37 @@ import plotly.graph_objects as go
 import requests
 import xml.etree.ElementTree as ET
 import time
-import random
 
 # --- הגדרות ---
 IB_TOKEN = "837126977366730658372732"
 IB_QUERY = "1492787" 
 SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vT8RIj327lCnv6-A_4Ofp6XmcMRWHlJCczNjVK-q1ZKXw9N16ltdo9mhDSZ8NT78eD1eoCb5zVE8EkV/pub?output=csv"
 
-st.set_page_config(page_title="RC Capital Live", layout="wide")
+st.set_page_config(page_title="RC Capital", layout="wide")
+st.markdown("<style> * { direction: rtl; text-align: right; } </style>", unsafe_allow_html=True)
 
-def get_real_live_nav():
-    """משיכת נתונים עם פקודה להביא קובץ חדש בלבד"""
-    try:
-        # הוספת מספר אקראי לבקשה כדי למנוע קבלת קובץ ישן מהזיכרון
-        t_stamp = int(time.time())
-        r = requests.get(f"https://www.interactivebrokers.com/Universal/servlet/FlexStatementService.SendRequest?t={IB_TOKEN}&q={IB_QUERY}&v=3&t_stamp={t_stamp}", timeout=15)
-        root = ET.fromstring(r.content)
-        
-        if root.find("Status").text == "Success":
-            url, code = root.find('Url').text, root.find('ReferenceCode').text
-            # המתנה שהשרת יסיים לעבד את הנתון החדש
-            time.sleep(12)
-            res = requests.get(f"{url}?q={code}&t={IB_TOKEN}", timeout=15)
-            d_root = ET.fromstring(res.content)
-            
-            # חיפוש הערך הכי מעודכן בדו"ח
-            nav_elements = d_root.findall(".//EquitySummaryByReportDateInBase")
-            vals = [float(el.get("total")) for el in nav_elements if el.get("total")]
-            if vals:
-                return max(vals)
-        return None
-    except: return None
-
-# ניהול מצב האפליקציה
+# זיכרון מערכת
 if 'total_nav' not in st.session_state: st.session_state.total_nav = 6131.72
 if 'df' not in st.session_state: st.session_state.df = None
+if 'auth' not in st.session_state: st.session_state.auth = False
 
-def full_refresh():
+def get_ibkr_nav():
+    try:
+        # שליחת בקשה עם מזהה זמן כדי למנוע Cache
+        r = requests.get(f"https://www.interactivebrokers.com/Universal/servlet/FlexStatementService.SendRequest?t={IB_TOKEN}&q={IB_QUERY}&v=3&nc={time.time()}", timeout=15)
+        root = ET.fromstring(r.content)
+        if root.find("Status").text == "Success":
+            url, code = root.find('Url').text, root.find('ReferenceCode').text
+            time.sleep(10)
+            res = requests.get(f"{url}?q={code}&t={IB_TOKEN}", timeout=15)
+            d_root = ET.fromstring(res.content)
+            # חיפוש הערך הכי גבוה בדו"ח
+            vals = [float(el.get("total")) for el in d_root.findall(".//EquitySummaryByReportDateInBase") if el.get("total")]
+            if vals: return max(vals)
+    except: pass
+    return None
+
+def refresh_data():
     # רענון גוגל שיטס
     try:
         df = pd.read_csv(f"{SHEET_URL}&cb={time.time()}")
@@ -49,34 +43,57 @@ def full_refresh():
         st.session_state.df = df
     except: pass
     
-    # רענון אינטראקטיב
-    new_val = get_real_live_nav()
-    if new_val:
-        st.session_state.total_nav = new_val
+    # ניסיון רענון אוטומטי מאינטראקטיב
+    new_nav = get_ibkr_nav()
+    if new_nav:
+        st.session_state.total_nav = new_nav
 
-# טעינה ראשונית
-if st.session_state.df is None: full_refresh()
+if st.session_state.df is None: refresh_data()
 
-# --- ממשק ---
-st.markdown("<style> * { direction: rtl; text-align: right; } </style>", unsafe_allow_html=True)
-
-with st.sidebar:
-    if st.button("🔄 רענון נתונים מהבורסה"):
-        with st.spinner("מושך נתונים עדכניים..."):
-            full_refresh()
+# --- כניסה ---
+if not st.session_state.auth:
+    st.title("RC Capital")
+    pin = st.text_input("PIN", type="password")
+    if st.button("כניסה"):
+        if pin == "0000": st.session_state.auth, st.session_state.role = True, "admin"
+        elif st.session_state.df is not None and str(pin) in st.session_state.df.iloc[:, 1].astype(str).values:
+            st.session_state.auth, st.session_state.role, st.session_state.pin = True, "user", str(pin)
         st.rerun()
-    st.write(f"שווי תיק כולל: **${st.session_state.total_nav:,.2f}**")
+else:
+    # סרגל צד
+    with st.sidebar:
+        st.write(f"שווי תיק נוכחי: **${st.session_state.total_nav:,.2f}**")
+        if st.button("🔄 רענון אוטומטי"):
+            refresh_data()
+            st.rerun()
+            
+        # פונקציית "עקיפה ידנית" למנהל
+        if st.session_state.role == "admin":
+            st.write("---")
+            st.write("עדכון ידני (Admin):")
+            manual_nav = st.number_input("הזן שווי תיק ידני", value=st.session_state.total_nav)
+            if st.button("עדכן לכולם"):
+                st.session_state.total_nav = manual_nav
+                st.success("עודכן!")
+                st.rerun()
+        
+        if st.button("התנתק"):
+            st.session_state.auth = False
+            st.rerun()
 
-# דף המשתמש (למשל קובי)
-if st.session_state.df is not None:
-    # כאן נניח שאנחנו בדף של קובי (לפי ה-PIN שלו)
-    # נשתמש בנתונים מה-DataFrame שנטען
-    st.title("מרכז השקעות")
-    
-    # החישוב שאתה מחפש:
-    total = st.session_state.total_nav
-    share = 7.81 # האחוז של קובי
-    kobi_value = total * (share / 100)
-    
-    st.metric("החלק שלך בתיק", f"${kobi_value:,.2f}")
-    st.write(f"מבוסס על שווי תיק כולל של: ${total:,.2f}")
+    # תצוגת משתמש
+    if st.session_state.role == "user":
+        user = st.session_state.df[st.session_state.df.iloc[:, 1].astype(str) == st.session_state.pin].iloc[0]
+        name, inv, share = user.iloc[0], user.iloc[2], user.iloc[3]
+        
+        # החישוב תמיד מתבסס על ה-total_nav שמופיע בסיידבר
+        u_gross = st.session_state.total_nav * (share / 100.0)
+        profit = u_gross - inv
+        tax = profit * 0.25 if profit > 0 and "רפאל" not in name else 0
+        u_net = u_gross - tax
+
+        st.header(f"שלום, {name}")
+        st.metric("היתרה שלך נטו", f"${u_net:,.2f}", delta=f"{u_net-inv:,.2f}")
+        
+        fig = go.Figure(go.Scatter(x=["הפקדה", "נוכחי"], y=[inv, u_net], mode='lines+markers+text', text=[f"${inv:,.0f}", f"${u_net:,.0f}"], textposition="top center"))
+        st.plotly_chart(fig, use_container_width=True)
