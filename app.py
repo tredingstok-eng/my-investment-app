@@ -12,63 +12,61 @@ SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vT8RIj327lCnv6-A_4O
 st.set_page_config(page_title="Debug Mode", layout="wide")
 st.markdown("<style> * { direction: rtl; text-align: right; } </style>", unsafe_allow_html=True)
 
-# משתנה הזיכרון
 if 'total_nav' not in st.session_state: 
-    st.session_state.total_nav = 6131.72 # ערך התחלה
+    st.session_state.total_nav = 6131.72
 
 def debug_fetch():
-    """פונקציה שמדפיסה הכל כדי שנבין למה זה לא זז"""
     try:
         st.write("📡 שולח בקשה לאינטראקטיב...")
-        r = requests.get(f"https://www.interactivebrokers.com/Universal/servlet/FlexStatementService.SendRequest?t={IB_TOKEN}&q={IB_QUERY}&v=3")
+        # שימוש ב-Timeout כדי למנוע תקיעה
+        r = requests.get(f"https://www.interactivebrokers.com/Universal/servlet/FlexStatementService.SendRequest?t={IB_TOKEN}&q={IB_QUERY}&v=3", timeout=15)
         
-        # הדפסת תגובה ראשונית
         if "ErrorCode" in r.text:
             st.error(f"שגיאה מאינטראקטיב: {r.text}")
             return None
             
         root = ET.fromstring(r.content)
-        if root.find("Status").text == "Success":
+        status_elem = root.find("Status")
+        
+        if status_elem is not None and status_elem.text == "Success":
             code = root.find('ReferenceCode').text
             url = root.find('Url').text
-            st.info(f"קוד דו"ח התקבל: {code}. מחכה 10 שניות לייצור הקובץ...")
+            st.info(f"הבקשה הצליחה. קוד: {code}. מחכה 12 שניות לייצור הקובץ...")
             
-            time.sleep(10)
-            res = requests.get(f"{url}?q={code}&t={IB_TOKEN}")
+            time.sleep(12)
+            res = requests.get(f"{url}?q={code}&t={IB_TOKEN}", timeout=15)
             
             if b"NetAssetValue" in res.content:
                 d_root = ET.fromstring(res.content)
                 navs = [float(n.get("total")) for n in d_root.findall(".//NetAssetValue") if n.get("total")]
                 if navs:
                     new_val = max(navs)
-                    st.success(f"הצלחתי! המספר החדש הוא: ${new_val:,.2f}")
+                    st.success(f"הצלחתי! המספר המעודכן הוא: ${new_val:,.2f}")
                     return new_val
                 else:
-                    st.warning("הקובץ הגיע אבל הוא ריק מנתוני NAV. בדוק את הגדרות ה-Query ב-IBKR.")
+                    st.warning("הקובץ התקבל אבל לא נמצאו נתוני NAV בתוכו. וודא שב-Flex Query סימנת את סעיף Net Asset Value.")
             else:
-                st.error("התקבל קובץ לא תקין (לא XML של נתונים).")
+                st.error("התקבל קובץ ריק או לא תקין מאינטראקטיב.")
         else:
-            st.error(f"סטטוס נכשל: {r.text}")
+            st.error(f"אינטראקטיב החזיר סטטוס שגיאה: {r.text}")
     except Exception as e:
         st.error(f"שגיאה טכנית: {str(e)}")
     return None
 
-# ממשק פשוט
-st.title("בדיקת חיבור RC Capital")
+st.title("מערכת בדיקת סנכרון IBKR")
 
-if st.button("לחץ כאן לבדיקת נתונים בזמן אמת"):
+if st.button("בצע בדיקה עכשיו"):
     val = debug_fetch()
     if val:
         st.session_state.total_nav = val
     st.rerun()
 
 st.write("---")
-st.header(f"המספר כרגע במערכת: ${st.session_state.total_nav:,.2f}")
+st.header(f"המספר השמור כרגע: ${st.session_state.total_nav:,.2f}")
 
-# טעינת גוגל שיטס רק לראות שזה עובד
-if st.checkbox("הצג נתונים מגוגל שיטס"):
+if st.checkbox("הצג נתונים מגוגל שיטס (לוודא חיבור)"):
     try:
         df = pd.read_csv(f"{SHEET_URL}&cb={time.time()}")
         st.dataframe(df)
     except:
-        st.error("לא מצליח לקרוא את גוגל שיטס")
+        st.error("לא מצליח להתחבר לגוגל שיטס")
