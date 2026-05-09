@@ -31,19 +31,43 @@ def get_ibkr_nav():
             f"?t={IB_TOKEN}&q={IB_QUERY}&v=3",
             timeout=10
         )
+        st.sidebar.caption("📋 תגובת IBKR (שלב 1):")
+        st.sidebar.code(r.text[:600])
+
         root = ET.fromstring(r.content)
-        if root.find("Status") is not None and root.find("Status").text == "Success":
-            url = root.find('Url').text
-            code = root.find('ReferenceCode').text
-            time.sleep(2)
-            res = requests.get(f"{url}?q={code}&t={IB_TOKEN}&_={int(time.time())}", timeout=10)
-            d_root = ET.fromstring(res.content)
-            nav_elements = d_root.findall(".//EquitySummaryByReportDateInBase")
-            vals = [float(el.get("total")) for el in nav_elements if el.get("total")]
-            if vals:
-                return max(vals)
+        status = root.find("Status")
+
+        if status is None:
+            st.sidebar.error("❌ לא נמצא שדה Status בתגובה")
+            return None
+
+        if status.text != "Success":
+            error_msg = root.find("ErrorMessage")
+            st.sidebar.error(f"❌ סטטוס: {status.text} | שגיאה: {error_msg.text if error_msg is not None else 'לא ידוע'}")
+            return None
+
+        url = root.find('Url').text
+        code = root.find('ReferenceCode').text
+        time.sleep(2)
+
+        res = requests.get(f"{url}?q={code}&t={IB_TOKEN}&_={int(time.time())}", timeout=10)
+        st.sidebar.caption("📋 תגובת IBKR (שלב 2):")
+        st.sidebar.code(res.text[:600])
+
+        d_root = ET.fromstring(res.content)
+        nav_elements = d_root.findall(".//EquitySummaryByReportDateInBase")
+
+        if not nav_elements:
+            st.sidebar.error("❌ לא נמצא שדה EquitySummaryByReportDateInBase ב-XML")
+            return None
+
+        vals = [float(el.get("total")) for el in nav_elements if el.get("total")]
+        if vals:
+            st.sidebar.success(f"✅ NAV נמשך בהצלחה: ${max(vals):,.2f}")
+            return max(vals)
+
     except Exception as e:
-        st.sidebar.warning(f"IBKR API: {e}")
+        st.sidebar.error(f"❌ שגיאה: {e}")
     return None
 
 
