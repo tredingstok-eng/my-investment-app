@@ -1,5 +1,4 @@
-pandas
-plotly
-requests
-pytz
-lxml
+streamlit>=1.32.0
+pandas>=2.0.0
+requests>=2.31.0
+plotly>=5.19.0
