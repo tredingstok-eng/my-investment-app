@@ -12,8 +12,8 @@ ADMIN_PIN       = "0000"
 TAX_RATE        = 0.25
 IBKR_WAIT_SECS  = 12
 
-# הלינק של ה-Apps Script שלך מוטמע כאן בהצלחה!
-APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyGFFX8CHBRAQSfobtOdcZNnyGc5VRiI677YkktZIjwrAcA2zuyBhuk8mY3D1mbai2E/exec"
+# הלינק החדש ביותר שלך מעודכן כאן!
+APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxbjPgewwMtpEXKF-8A-4KuXCofmc4yfcle_htbxtdVEvMnTMe6mCBuF8liMWJ2Wj6f/exec"
 
 GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1AuspdxTTFAoAYqgU0bpGko6-Z1PUcI3Zs7kF-ixjVC0/edit?usp=sharing"
 GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vT8RIj327lCnv6-A_4Ofp6XmcMRWHlJCczNjVK-q1ZKXw9N16ltdo9mhDSZ8NT78eD1eoCb5zVE8EkV/pub?output=csv"
@@ -86,6 +86,7 @@ hr { border-color: #1d3557 !important; }
 if "authenticated" not in st.session_state: st.session_state.authenticated = False
 if "user_row" not in st.session_state: st.session_state.user_row = None
 if "is_admin" not in st.session_state: st.session_state.is_admin = False
+if "live_nav" not in st.session_state: st.session_state.live_nav = None
 
 # ─── DATA LOADERS ────────────────────────────────────────────────────────────
 @st.cache_data(ttl=2)
@@ -98,8 +99,9 @@ def load_users_and_nav() -> tuple:
     if df.shape[1] > 5:
         nav_val = str(df.iloc[0, 5]).replace('$', '').replace(',', '').strip()
         try:
-            saved_nav = float(nav_val)
-            if saved_nav <= 0: saved_nav = None
+            if nav_val.lower() != 'nan' and nav_val != '':
+                saved_nav = float(nav_val)
+                if saved_nav <= 0: saved_nav = None
         except ValueError:
             saved_nav = None
 
@@ -115,14 +117,17 @@ def load_users_and_nav() -> tuple:
     return cleaned_df, saved_nav
 
 
-def save_nav_to_google_sheet(new_nav: float):
-    """שולח את הנתון העדכני ל-Google Apps Script שמעדכן את קובץ ה-Sheets בלייב"""
+def save_nav_to_google_sheet(new_nav: float) -> bool:
+    """מעדכן את הזיכרון הפנימי מיד ושולח ברקע פקודת שמירה לגוגל שיטס"""
+    st.session_state.live_nav = new_nav
     if "https://" in APPS_SCRIPT_URL:
         try:
-            requests.get(f"{APPS_SCRIPT_URL}?value={new_nav}", timeout=10)
-            st.cache_data.clear()  # מנקה את ה-Cache של האפליקציה כדי שתטען מיד את המספר החדש
+            res = requests.get(f"{APPS_SCRIPT_URL}?value={new_nav}", timeout=10)
+            st.cache_data.clear()
+            return True
         except Exception:
             pass
+    return False
 
 
 def fetch_ibkr_nav() -> tuple:
@@ -214,7 +219,14 @@ def show_login():
 # ─── ADMIN COMMAND CENTER ─────────────────────────────────────────────────────
 def show_admin():
     users, saved_nav = load_users_and_nav()
-    nav = saved_nav if saved_nav is not None else 5000.0
+    
+    # לוגיקת קביעת ה-NAV האפקטיבי: עדיפות למה שהוקלד בלייב, אחר כך לגוגל שיטס, ובסוף ברירת מחדל 9500
+    if st.session_state.live_nav is not None:
+        nav = st.session_state.live_nav
+    elif saved_nav is not None:
+        nav = saved_nav
+    else:
+        nav = 9500.0
 
     col_title, col_logout = st.columns([6, 1])
     with col_title: st.markdown("## 🏛️ Command Center — RC Capital")
@@ -232,10 +244,11 @@ def show_admin():
             manual_nav = st.number_input("הזן שווי תיק כולל ($)", min_value=0.0, step=100.0, value=float(nav), format="%.2f")
             if st.button("💾 שמור שווי תיק קבוע"):
                 if manual_nav > 0:
-                    with st.spinner("שומר ומעדכן קובץ גוגל שיטס..."):
+                    st.session_state.live_nav = manual_nav
+                    with st.spinner("שומר ומעדכן קובץ גוגל שיטס ברקע..."):
                         save_nav_to_google_sheet(manual_nav)
-                    st.success(f"✅ שווי נשמר בהצלחה בגוגל שיטס בתא F2: ${manual_nav:,.2f}")
-                    time.sleep(1.0)
+                    st.success(f"✅ שווי עודכן באפליקציה ונשלח ל-Sheets תא F2: ${manual_nav:,.2f}")
+                    time.sleep(0.5)
                     st.rerun()
 
         with ctrl_mid:
@@ -245,19 +258,20 @@ def show_admin():
                     fetched_nav, err = fetch_ibkr_nav()
                 if err: st.error(err)
                 else:
+                    st.session_state.live_nav = fetched_nav
                     with st.spinner("שומר את הנתון מ-IBKR בגוגל שיטס..."):
                         save_nav_to_google_sheet(fetched_nav)
                     st.success(f"✅ עודכן ונשמר מ-IBKR: ${fetched_nav:,.2f}")
-                    time.sleep(1.0)
+                    time.sleep(0.5)
                     st.rerun()
 
         with ctrl_right:
             st.markdown("**שווי שמור נוכחי**")
             st.markdown(f"""
             <div class="kpi-card" style="padding:16px;">
-                <div class="kpi-label">NAV קבוע בגיליון</div>
+                <div class="kpi-label">NAV פעיל במערכת</div>
                 <div class="kpi-value green" style="font-size:1.4rem;">${nav:,.2f}</div>
-                <div class="kpi-sub">קריאה חיה מתא F2</div>
+                <div class="kpi-sub">מעודכן בזמן אמת</div>
             </div>""", unsafe_allow_html=True)
 
     # חישובים
@@ -269,61 +283,9 @@ def show_admin():
     overall_roi   = (total_pnl / total_initial * 100) if total_initial else 0
 
     c1, c2, c3, c4 = st.columns(4)
-    with c1: st.markdown(kpi("NAV מאסטר", f"${nav:,.2f}", "Google Sheet F2"), unsafe_allow_html=True)
+    with c1: st.markdown(kpi("NAV מאסטר", f"${nav:,.2f}", "מזהה פעיל"), unsafe_allow_html=True)
     with c2: st.markdown(kpi("סה״כ הון מושקע", f"${total_initial:,.0f}"), unsafe_allow_html=True)
     with c3: st.markdown(kpi("סה״כ שווי נטו", f"${total_net:,.2f}"), unsafe_allow_html=True)
     with c4: st.markdown(kpi("רווח כולל נטו", f"${total_pnl:,.2f}", f"{overall_roi:.2f}% | מס: ${total_tax:,.2f}", "green" if total_pnl >= 0 else "red"), unsafe_allow_html=True)
 
-    st.markdown("### 📊 מצב חשבונות המשקיעים (מתוך הגיליון)")
-    rows = []
-    for (_, u), c in zip(users.iterrows(), calcs):
-        rows.append({
-            "שם": u["name"],
-            "חלק %": f"{u['share_pct']:.2f}%",
-            "הון ראשוני $": f"${u['initial_capital']:,.0f}",
-            "ברוטו $": f"${c['gross']:,.2f}",
-            "רווח/הפסד $": f"${c['pnl']:+,.2f}",
-            "מס $": f"${c['tax']:,.2f}" if c['tax'] > 0 else "—",
-            "שווי נטו $": f"${c['net']:,.2f}",
-            "תשואה %": f"{c['roi']:+.2f}%",
-            "סוג": "מנהל" if u["is_manager"] else "משקיע"
-        })
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-
-
-# ─── USER DASHBOARD ──────────────────────────────────────────────────────────
-def show_user():
-    u = st.session_state.user_row
-    users, saved_nav = load_users_and_nav()
-    nav = saved_nav if saved_nav is not None else 5000.0
-
-    current_user_match = users[users["name"] == u["name"]]
-    if not current_user_match.empty:
-        u = current_user_match.iloc[0].to_dict()
-
-    c = calculate(nav, float(u["share_pct"]), float(u["initial_capital"]), bool(u["is_manager"]))
-    
-    col_h, col_logout = st.columns([5, 1])
-    with col_h: st.markdown(f'<h2>שלום, {u["name"]} 👋</h2>', unsafe_allow_html=True)
-    with col_logout:
-        if st.button("התנתק"):
-            st.session_state.clear()
-            st.rerun()
-
-    st.markdown(f"""
-    <div class="kpi-card" style="max-width:480px; margin:0 auto 28px auto; padding:36px 28px;">
-        <div class="kpi-label">השווי נטו שלך</div>
-        <div class="kpi-value green" style="font-size:3rem;">${c['net']:,.2f}</div>
-        <div class="kpi-sub green" style="font-size:0.85rem;">{c['net_pnl']:+,.2f}$ | {c['roi']:+.2f}%</div>
-    </div>""", unsafe_allow_html=True)
-
-    c1, c2, c3 = st.columns(3)
-    with c1: st.markdown(kpi("הון ראשוני", f"${u['initial_capital']:,.0f}"), unsafe_allow_html=True)
-    with c2: st.markdown(kpi("פוזיציה ברוטו", f"${c['gross']:,.2f}", f"חלק: {u['share_pct']}%"), unsafe_allow_html=True)
-    with c3: st.markdown(kpi("מס רווח הון (25%)", f"${c['tax']:,.2f}" if c['tax'] > 0 else "אין", colour="gold" if c['tax'] > 0 else "green"), unsafe_allow_html=True)
-
-
-# ─── ROUTER ──────────────────────────────────────────────────────────────────
-if not st.session_state.authenticated: show_login()
-elif st.session_state.is_admin: show_admin()
-else: show_user()
+    st.markdown("###
