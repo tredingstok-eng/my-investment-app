@@ -3,7 +3,6 @@ import pandas as pd
 import requests
 import xml.etree.ElementTree as ET
 import time
-import plotly.graph_objects as go
 from datetime import datetime
 
 # ─── CONFIGURATION ──────────────────────────────────────────────────────────
@@ -13,7 +12,9 @@ ADMIN_PIN       = "0000"
 TAX_RATE        = 0.25
 IBKR_WAIT_SECS  = 12
 
-# הקישורים המדויקים לגיליון שלך
+# הלינק של ה-Apps Script שלך מוטמע כאן בהצלחה!
+APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyGFFX8CHBRAQSfobtOdcZNnyGc5VRiI677YkktZIjwrAcA2zuyBhuk8mY3D1mbai2E/exec"
+
 GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1AuspdxTTFAoAYqgU0bpGko6-Z1PUcI3Zs7kF-ixjVC0/edit?usp=sharing"
 GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vT8RIj327lCnv6-A_4Ofp6XmcMRWHlJCczNjVK-q1ZKXw9N16ltdo9mhDSZ8NT78eD1eoCb5zVE8EkV/pub?output=csv"
 
@@ -85,17 +86,14 @@ hr { border-color: #1d3557 !important; }
 if "authenticated" not in st.session_state: st.session_state.authenticated = False
 if "user_row" not in st.session_state: st.session_state.user_row = None
 if "is_admin" not in st.session_state: st.session_state.is_admin = False
-if "nav_override" not in st.session_state: st.session_state.nav_override = None
 
 # ─── DATA LOADERS ────────────────────────────────────────────────────────────
-@st.cache_data(ttl=5)
+@st.cache_data(ttl=2)
 def load_users_and_nav() -> tuple:
-    """טוען את המשתמשים ואת ה-NAV שנשמר בגוגל שיטס בצורה בטוחה בלי לקרוס"""
     bust = int(time.time())
     url = f"{GOOGLE_SHEET_CSV_URL}&cb={bust}"
     df = pd.read_csv(url)
     
-    # חילוץ בטוח של ה-NAV מעמודה F (אינדקס 5) בשורה הראשונה
     saved_nav = None
     if df.shape[1] > 5:
         nav_val = str(df.iloc[0, 5]).replace('$', '').replace(',', '').strip()
@@ -105,11 +103,8 @@ def load_users_and_nav() -> tuple:
         except ValueError:
             saved_nav = None
 
-    # לקיחת 4 העמודות הראשונות בלבד כדי למנוע ValueError
     cleaned_df = df.iloc[:, :4].copy()
     cleaned_df.columns = ['name', 'pin', 'initial_capital', 'share_pct']
-    
-    # ניקוי סיסמאות ומספרים
     cleaned_df["pin"] = cleaned_df["pin"].astype(str).str.strip().str.replace('.0', '', regex=False)
     
     for col in ["initial_capital", "share_pct"]:
@@ -117,8 +112,17 @@ def load_users_and_nav() -> tuple:
         cleaned_df[col] = pd.to_numeric(cleaned_df[col], errors="coerce").fillna(0)
     
     cleaned_df["is_manager"] = cleaned_df["name"].str.lower().str.contains("raphael")
-    
     return cleaned_df, saved_nav
+
+
+def save_nav_to_google_sheet(new_nav: float):
+    """שולח את הנתון העדכני ל-Google Apps Script שמעדכן את קובץ ה-Sheets בלייב"""
+    if "https://" in APPS_SCRIPT_URL:
+        try:
+            requests.get(f"{APPS_SCRIPT_URL}?value={new_nav}", timeout=10)
+            st.cache_data.clear()  # מנקה את ה-Cache של האפליקציה כדי שתטען מיד את המספר החדש
+        except Exception:
+            pass
 
 
 def fetch_ibkr_nav() -> tuple:
@@ -160,7 +164,6 @@ def calculate(nav: float, share_pct: float, initial_capital: float, is_manager: 
     return {"gross": gross, "pnl": pnl, "tax": tax, "net": net, "net_pnl": net - initial_capital, "roi": ((net - initial_capital) / initial_capital * 100) if initial_capital else 0.0}
 
 
-# ─── HELPER: KPI CARD HTML ────────────────────────────────────────────────────
 def kpi(label: str, value: str, sub: str = "", colour: str = "white") -> str:
     sub_html = f'<div class="kpi-sub">{sub}</div>' if sub else ""
     return f"""
@@ -211,17 +214,7 @@ def show_login():
 # ─── ADMIN COMMAND CENTER ─────────────────────────────────────────────────────
 def show_admin():
     users, saved_nav = load_users_and_nav()
-    
-    # מנגנון קביעת ה-NAV האפקטיבי השמור ב-state
-    if st.session_state.nav_override is not None:
-        nav = st.session_state.nav_override
-        nav_source = "שווי מעודכן בזיכרון האפליקציה"
-    elif saved_nav is not None:
-        nav = saved_nav
-        nav_source = "נמשך מתוך ה-Google Sheet"
-    else:
-        nav = 5000.0
-        nav_source = "ערך ברירת מחדל"
+    nav = saved_nav if saved_nav is not None else 5000.0
 
     col_title, col_logout = st.columns([6, 1])
     with col_title: st.markdown("## 🏛️ Command Center — RC Capital")
@@ -237,33 +230,37 @@ def show_admin():
         with ctrl_left:
             st.markdown("**📝 עדכון שווי תיק ידני**")
             manual_nav = st.number_input("הזן שווי תיק כולל ($)", min_value=0.0, step=100.0, value=float(nav), format="%.2f")
-            if st.button("✅ החל ושמור שווי תיק"):
+            if st.button("💾 שמור שווי תיק קבוע"):
                 if manual_nav > 0:
-                    st.session_state.nav_override = manual_nav
-                    st.success(f"השווי עודכן בהצלחה ל- ${manual_nav:,.2f}")
+                    with st.spinner("שומר ומעדכן קובץ גוגל שיטס..."):
+                        save_nav_to_google_sheet(manual_nav)
+                    st.success(f"✅ שווי נשמר בהצלחה בגוגל שיטס בתא F2: ${manual_nav:,.2f}")
+                    time.sleep(1.0)
                     st.rerun()
 
         with ctrl_mid:
             st.markdown("**📡 סנכרון אוטומטי**")
-            if st.button("🔄 משוך נתונים מ-IBKR"):
+            if st.button("🔄 משוך ושמור מ-IBKR"):
                 with st.spinner("מתחבר לשרתי IBKR..."):
                     fetched_nav, err = fetch_ibkr_nav()
                 if err: st.error(err)
                 else:
-                    st.session_state.nav_override = fetched_nav
-                    st.success(f"✅ נתונים נמשכו בהצלחה מ-IBKR: ${fetched_nav:,.2f}")
+                    with st.spinner("שומר את הנתון מ-IBKR בגוגל שיטס..."):
+                        save_nav_to_google_sheet(fetched_nav)
+                    st.success(f"✅ עודכן ונשמר מ-IBKR: ${fetched_nav:,.2f}")
+                    time.sleep(1.0)
                     st.rerun()
 
         with ctrl_right:
-            st.markdown("**שווי נוכחי**")
+            st.markdown("**שווי שמור נוכחי**")
             st.markdown(f"""
             <div class="kpi-card" style="padding:16px;">
-                <div class="kpi-label">NAV פעיל</div>
+                <div class="kpi-label">NAV קבוע בגיליון</div>
                 <div class="kpi-value green" style="font-size:1.4rem;">${nav:,.2f}</div>
-                <div class="kpi-sub">{nav_source}</div>
+                <div class="kpi-sub">קריאה חיה מתא F2</div>
             </div>""", unsafe_allow_html=True)
 
-    # חישובים וטבלה
+    # חישובים
     calcs = [calculate(nav, r["share_pct"], r["initial_capital"], r["is_manager"]) for _, r in users.iterrows()]
     total_initial = users["initial_capital"].sum()
     total_net     = sum(c["net"] for c in calcs)
@@ -272,7 +269,7 @@ def show_admin():
     overall_roi   = (total_pnl / total_initial * 100) if total_initial else 0
 
     c1, c2, c3, c4 = st.columns(4)
-    with c1: st.markdown(kpi("NAV מאסטר", f"${nav:,.2f}", nav_source), unsafe_allow_html=True)
+    with c1: st.markdown(kpi("NAV מאסטר", f"${nav:,.2f}", "Google Sheet F2"), unsafe_allow_html=True)
     with c2: st.markdown(kpi("סה״כ הון מושקע", f"${total_initial:,.0f}"), unsafe_allow_html=True)
     with c3: st.markdown(kpi("סה״כ שווי נטו", f"${total_net:,.2f}"), unsafe_allow_html=True)
     with c4: st.markdown(kpi("רווח כולל נטו", f"${total_pnl:,.2f}", f"{overall_roi:.2f}% | מס: ${total_tax:,.2f}", "green" if total_pnl >= 0 else "red"), unsafe_allow_html=True)
@@ -298,10 +295,7 @@ def show_admin():
 def show_user():
     u = st.session_state.user_row
     users, saved_nav = load_users_and_nav()
-    
-    if st.session_state.nav_override is not None: nav = st.session_state.nav_override
-    elif saved_nav is not None: nav = saved_nav
-    else: nav = 5000.0
+    nav = saved_nav if saved_nav is not None else 5000.0
 
     current_user_match = users[users["name"] == u["name"]]
     if not current_user_match.empty:
