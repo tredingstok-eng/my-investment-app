@@ -13,7 +13,7 @@ ADMIN_PIN       = "0000"
 TAX_RATE        = 0.25
 IBKR_WAIT_SECS  = 12
 
-# הקישורים הנכונים לגיליון שלך
+# הקישורים המדויקים לגיליון שלך
 GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1AuspdxTTFAoAYqgU0bpGko6-Z1PUcI3Zs7kF-ixjVC0/edit?usp=sharing"
 GOOGLE_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vT8RIj327lCnv6-A_4Ofp6XmcMRWHlJCczNjVK-q1ZKXw9N16ltdo9mhDSZ8NT78eD1eoCb5zVE8EkV/pub?output=csv"
 
@@ -85,17 +85,17 @@ hr { border-color: #1d3557 !important; }
 if "authenticated" not in st.session_state: st.session_state.authenticated = False
 if "user_row" not in st.session_state: st.session_state.user_row = None
 if "is_admin" not in st.session_state: st.session_state.is_admin = False
-if "local_nav_override" not in st.session_state: st.session_state.local_nav_override = None
+if "nav_override" not in st.session_state: st.session_state.nav_override = None
 
 # ─── DATA LOADERS ────────────────────────────────────────────────────────────
 @st.cache_data(ttl=5)
 def load_users_and_nav() -> tuple:
-    """טוען את המשתמשים ואת ה-NAV שנשמר בגוגל שיטס באופן מאובטח"""
+    """טוען את המשתמשים ואת ה-NAV שנשמר בגוגל שיטס בצורה בטוחה בלי לקרוס"""
     bust = int(time.time())
     url = f"{GOOGLE_SHEET_CSV_URL}&cb={bust}"
     df = pd.read_csv(url)
     
-    # חילוץ ה-NAV השמור מעמודה F (אינדקס 5) בשורה הראשונה
+    # חילוץ בטוח של ה-NAV מעמודה F (אינדקס 5) בשורה הראשונה
     saved_nav = None
     if df.shape[1] > 5:
         nav_val = str(df.iloc[0, 5]).replace('$', '').replace(',', '').strip()
@@ -105,11 +105,11 @@ def load_users_and_nav() -> tuple:
         except ValueError:
             saved_nav = None
 
-    # חיתוך ומיפוי מדויק רק של 4 העמודות הראשונות
+    # לקיחת 4 העמודות הראשונות בלבד כדי למנוע ValueError
     cleaned_df = df.iloc[:, :4].copy()
     cleaned_df.columns = ['name', 'pin', 'initial_capital', 'share_pct']
     
-    # ניקוי נתונים
+    # ניקוי סיסמאות ומספרים
     cleaned_df["pin"] = cleaned_df["pin"].astype(str).str.strip().str.replace('.0', '', regex=False)
     
     for col in ["initial_capital", "share_pct"]:
@@ -119,20 +119,6 @@ def load_users_and_nav() -> tuple:
     cleaned_df["is_manager"] = cleaned_df["name"].str.lower().str.contains("raphael")
     
     return cleaned_df, saved_nav
-
-
-def save_nav_to_google_sheets(new_nav: float):
-    """שומר את ה-NAV ישירות בתוך תא F2 בגוגל שיטס באמצעות Apps Script Web App של גוגל"""
-    # אנחנו שומרים את זה ב-state המקומי כגיבוי מהיר
-    st.session_state.local_nav_override = new_nav
-    
-    # פקודת Apps Script חכמה שמעדכנת את תא F2 ישירות דרך לינק ה-Macros של גוגל
-    sheet_id = "1AuspdxTTFAoAYqgU0bpGko6-Z1PUcI3Zs7kF-ixjVC0"
-    # יוצר לינק לעדכון תא F2 (שורה 2, עמודה 6)
-    update_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/api/fixed_nav?value={new_nav}"
-    
-    # הערה: מכיוון שעדכון כתיבה דורש הגדרת Apps Script, הוספנו מנגנון פולבק מקומי מנצח ב-Session
-    st.cache_data.clear()
 
 
 def fetch_ibkr_nav() -> tuple:
@@ -224,19 +210,18 @@ def show_login():
 
 # ─── ADMIN COMMAND CENTER ─────────────────────────────────────────────────────
 def show_admin():
-    # טעינת הנתונים העדכניים מהקובץ וה-NAV השמור
     users, saved_nav = load_users_and_nav()
     
-    # קביעת ה-NAV האפקטיבי (העדיפות היא לעדכון הנוכחי, אז לקובץ, אז לבררת מחדל 5000)
-    if st.session_state.local_nav_override is not None:
-        nav = st.session_state.local_nav_override
-        nav_source = "עודכן כעת (נשמר בזיכרון)"
+    # מנגנון קביעת ה-NAV האפקטיבי השמור ב-state
+    if st.session_state.nav_override is not None:
+        nav = st.session_state.nav_override
+        nav_source = "שווי מעודכן בזיכרון האפליקציה"
     elif saved_nav is not None:
         nav = saved_nav
-        nav_source = "נלקח מתוך ה-Google Sheet"
+        nav_source = "נמשך מתוך ה-Google Sheet"
     else:
-        nav = 5000.0  # ברירת מחדל לפי הגיליון שלך
-        nav_source = "ברירת מחדל (תא F2 ריק)"
+        nav = 5000.0
+        nav_source = "ערך ברירת מחדל"
 
     col_title, col_logout = st.columns([6, 1])
     with col_title: st.markdown("## 🏛️ Command Center — RC Capital")
@@ -254,7 +239,7 @@ def show_admin():
             manual_nav = st.number_input("הזן שווי תיק כולל ($)", min_value=0.0, step=100.0, value=float(nav), format="%.2f")
             if st.button("✅ החל ושמור שווי תיק"):
                 if manual_nav > 0:
-                    save_nav_to_google_sheets(manual_nav)
+                    st.session_state.nav_override = manual_nav
                     st.success(f"השווי עודכן בהצלחה ל- ${manual_nav:,.2f}")
                     st.rerun()
 
@@ -265,7 +250,7 @@ def show_admin():
                     fetched_nav, err = fetch_ibkr_nav()
                 if err: st.error(err)
                 else:
-                    save_nav_to_google_sheets(fetched_nav)
+                    st.session_state.nav_override = fetched_nav
                     st.success(f"✅ נתונים נמשכו בהצלחה מ-IBKR: ${fetched_nav:,.2f}")
                     st.rerun()
 
@@ -314,12 +299,10 @@ def show_user():
     u = st.session_state.user_row
     users, saved_nav = load_users_and_nav()
     
-    # משיכת ה-NAV העדכני ביותר
-    if st.session_state.local_nav_override is not None: nav = st.session_state.local_nav_override
+    if st.session_state.nav_override is not None: nav = st.session_state.nav_override
     elif saved_nav is not None: nav = saved_nav
     else: nav = 5000.0
 
-    # עדכון שורת המשתמש מהקובץ בזמן אמת למקרה שהשתנה אחוז התיק או ההפקדה בגוגל שיטס
     current_user_match = users[users["name"] == u["name"]]
     if not current_user_match.empty:
         u = current_user_match.iloc[0].to_dict()
