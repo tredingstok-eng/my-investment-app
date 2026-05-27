@@ -12,7 +12,7 @@ ADMIN_PIN       = "0000"
 TAX_RATE        = 0.25
 IBKR_WAIT_SECS  = 12
 
-# הלינק החדש ביותר שלך מעודכן כאן!
+# הלינק המעודכן ביותר שלך מוטמע כאן
 APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxbjPgewwMtpEXKF-8A-4KuXCofmc4yfcle_htbxtdVEvMnTMe6mCBuF8liMWJ2Wj6f/exec"
 
 GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1AuspdxTTFAoAYqgU0bpGko6-Z1PUcI3Zs7kF-ixjVC0/edit?usp=sharing"
@@ -220,7 +220,6 @@ def show_login():
 def show_admin():
     users, saved_nav = load_users_and_nav()
     
-    # לוגיקת קביעת ה-NAV האפקטיבי: עדיפות למה שהוקלד בלייב, אחר כך לגוגל שיטס, ובסוף ברירת מחדל 9500
     if st.session_state.live_nav is not None:
         nav = st.session_state.live_nav
     elif saved_nav is not None:
@@ -288,4 +287,59 @@ def show_admin():
     with c3: st.markdown(kpi("סה״כ שווי נטו", f"${total_net:,.2f}"), unsafe_allow_html=True)
     with c4: st.markdown(kpi("רווח כולל נטו", f"${total_pnl:,.2f}", f"{overall_roi:.2f}% | מס: ${total_tax:,.2f}", "green" if total_pnl >= 0 else "red"), unsafe_allow_html=True)
 
-    st.markdown("###
+    st.markdown("### 📊 מצב חשבונות המשקיעים (מתוך הגיליון)")
+    rows = []
+    for (_, u), c in zip(users.iterrows(), calcs):
+        rows.append({
+            "שם": u["name"],
+            "חלק %": f"{u['share_pct']:.2f}%",
+            "הון ראשוני $": f"${u['initial_capital']:,.0f}",
+            "ברוטו $": f"${c['gross']:,.2f}",
+            "רווח/הפסד $": f"${c['pnl']:+,.2f}",
+            "מס $": f"${c['tax']:,.2f}" if c['tax'] > 0 else "—",
+            "שווי נטו $": f"${c['net']:,.2f}",
+            "תשואה %": f"{c['roi']:+.2f}%",
+            "סוג": "מנהל" if u["is_manager"] else "משקיע"
+        })
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+# ─── USER DASHBOARD ──────────────────────────────────────────────────────────
+def show_user():
+    u = st.session_state.user_row
+    users, saved_nav = load_users_and_nav()
+    
+    if st.session_state.live_nav is not None: nav = st.session_state.live_nav
+    elif saved_nav is not None: nav = saved_nav
+    else: nav = 9500.0
+
+    current_user_match = users[users["name"] == u["name"]]
+    if not current_user_match.empty:
+        u = current_user_match.iloc[0].to_dict()
+
+    c = calculate(nav, float(u["share_pct"]), float(u["initial_capital"]), bool(u["is_manager"]))
+    
+    col_h, col_logout = st.columns([5, 1])
+    with col_h: st.markdown(f'<h2>שלום, {u["name"]} 👋</h2>', unsafe_allow_html=True)
+    with col_logout:
+        if st.button("התנתק"):
+            st.session_state.clear()
+            st.rerun()
+
+    st.markdown(f"""
+    <div class="kpi-card" style="max-width:480px; margin:0 auto 28px auto; padding:36px 28px;">
+        <div class="kpi-label">השווי נטו שלך</div>
+        <div class="kpi-value green" style="font-size:3rem;">${c['net']:,.2f}</div>
+        <div class="kpi-sub green" style="font-size:0.85rem;">{c['net_pnl']:+,.2f}$ | {c['roi']:+.2f}%</div>
+    </div>""", unsafe_allow_html=True)
+
+    c1, c2, c3 = st.columns(3)
+    with c1: st.markdown(kpi("הון ראשוני", f"${u['initial_capital']:,.0f}"), unsafe_allow_html=True)
+    with c2: st.markdown(kpi("פוזיציה ברוטו", f"${c['gross']:,.2f}", f"חלק: {u['share_pct']}%"), unsafe_allow_html=True)
+    with c3: st.markdown(kpi("מס רווח הון (25%)", f"${c['tax']:,.2f}" if c['tax'] > 0 else "אין", colour="gold" if c['tax'] > 0 else "green"), unsafe_allow_html=True)
+
+
+# ─── ROUTER ──────────────────────────────────────────────────────────────────
+if not st.session_state.authenticated: show_login()
+elif st.session_state.is_admin: show_admin()
+else: show_user()
