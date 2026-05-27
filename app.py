@@ -12,7 +12,6 @@ ADMIN_PIN       = "0000"
 TAX_RATE        = 0.25
 IBKR_WAIT_SECS  = 12
 
-# הלינק המעודכן ביותר שלך מוטמע כאן
 APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxbjPgewwMtpEXKF-8A-4KuXCofmc4yfcle_htbxtdVEvMnTMe6mCBuF8liMWJ2Wj6f/exec"
 
 GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1AuspdxTTFAoAYqgU0bpGko6-Z1PUcI3Zs7kF-ixjVC0/edit?usp=sharing"
@@ -118,7 +117,6 @@ def load_users_and_nav() -> tuple:
 
 
 def save_nav_to_google_sheet(new_nav: float) -> bool:
-    """מעדכן את הזיכרון הפנימי מיד ושולח ברקע פקודת שמירה לגוגל שיטס"""
     st.session_state.live_nav = new_nav
     if "https://" in APPS_SCRIPT_URL:
         try:
@@ -304,7 +302,7 @@ def show_admin():
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
-# ─── USER DASHBOARD ──────────────────────────────────────────────────────────
+# ─── USER DASHBOARD (תצוגת ענק: רווח נקי -> שווי תיק ואחוזים) ─────────────────────
 def show_user():
     u = st.session_state.user_row
     users, saved_nav = load_users_and_nav()
@@ -319,24 +317,59 @@ def show_user():
 
     c = calculate(nav, float(u["share_pct"]), float(u["initial_capital"]), bool(u["is_manager"]))
     
+    pnl_color = "green" if c['net_pnl'] >= 0 else "red"
+    pnl_sign = "+" if c['net_pnl'] >= 0 else ""
+
     col_h, col_logout = st.columns([5, 1])
-    with col_h: st.markdown(f'<h2>שלום, {u["name"]} 👋</h2>', unsafe_allow_html=True)
+    with col_h: 
+        st.markdown(f'<h2 style="margin-bottom:0;">שלום, {u["name"]} 👋</h2>', unsafe_allow_html=True)
+        st.markdown('<p class="muted" style="margin-top:4px; font-size:0.9rem;">לוח בקרה פיננסי אישי</p>', unsafe_allow_html=True)
     with col_logout:
         if st.button("התנתק"):
             st.session_state.clear()
             st.rerun()
 
-    st.markdown(f"""
-    <div class="kpi-card" style="max-width:480px; margin:0 auto 28px auto; padding:36px 28px;">
-        <div class="kpi-label">השווי נטו שלך</div>
-        <div class="kpi-value green" style="font-size:3rem;">${c['net']:,.2f}</div>
-        <div class="kpi-sub green" style="font-size:0.85rem;">{c['net_pnl']:+,.2f}$ | {c['roi']:+.2f}%</div>
-    </div>""", unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
 
+    # 🚨 תצוגת ענק מבוקשת: כרטיס רווח נקי ואז כרטיס שווי תיק עם אחוזים
+    col_main_1, col_main_2 = st.columns(2)
+    with col_main_1:
+        st.markdown(f"""
+        <div class="kpi-card" style="padding:40px 24px; border: 2px solid #1d3557;">
+            <div class="kpi-label" style="font-size:0.9rem; letter-spacing:0.08em;">🔥 רווח / הפסד נטו (שלך)</div>
+            <div class="kpi-value {pnl_color}" style="font-size:3.5rem; font-weight:900;">{pnl_sign}${c['net_pnl']:,.2f}</div>
+            <div class="kpi-sub">הרווח הנקי שלך שיוצר בחשבון</div>
+        </div>""", unsafe_allow_html=True)
+        
+    with col_main_2:
+        st.markdown(f"""
+        <div class="kpi-card" style="padding:40px 24px; border: 2px solid #1d3557;">
+            <div class="kpi-label" style="font-size:0.9rem; letter-spacing:0.08em;">💰 שווי תיק עדכני (נטו) ושווי אחוזים</div>
+            <div class="kpi-value green" style="font-size:3.5rem; font-weight:900;">${c['net']:,.2f}</div>
+            <div class="kpi-sub {pnl_color}" style="font-weight:700; font-size:1.1rem; margin-top:10px;">תשואה באחוזים: {c['roi']:+.2f}%</div>
+        </div>""", unsafe_allow_html=True)
+
+    st.markdown("<br><hr>", unsafe_allow_html=True)
+
+    # נתוני רקע ועמלות
+    st.markdown('<h3 style="font-size:1.2rem; font-weight:700;">📋 פרמטרים ונתוני בסיס של החשבון</h3>', unsafe_allow_html=True)
+    
     c1, c2, c3 = st.columns(3)
-    with c1: st.markdown(kpi("הון ראשוני", f"${u['initial_capital']:,.0f}"), unsafe_allow_html=True)
-    with c2: st.markdown(kpi("פוזיציה ברוטו", f"${c['gross']:,.2f}", f"חלק: {u['share_pct']}%"), unsafe_allow_html=True)
-    with c3: st.markdown(kpi("מס רווח הון (25%)", f"${c['tax']:,.2f}" if c['tax'] > 0 else "אין", colour="gold" if c['tax'] > 0 else "green"), unsafe_allow_html=True)
+    with c1: 
+        st.markdown(kpi("🏦 הון ראשוני מושקע", f"${u['initial_capital']:,.0f}", "סך הכל כסף שהפקדת"), unsafe_allow_html=True)
+    with c2: 
+        st.markdown(kpi("📊 שווי פוזיציה ברוטו", f"${c['gross']:,.2f}", f"החלק היחסי שלך בקרן: {u['share_pct']:.2f}%"), unsafe_allow_html=True)
+    with c3: 
+        tax_title = "🛡️ עמלת מנהל / מס (25%)" if not u["is_manager"] else "🛡️ סטטוס פרופיל"
+        tax_value = f"${c['tax']:,.2f}" if c['tax'] > 0 else ("אין (מצב הפסד)" if not u["is_manager"] else "מנהל מערכת")
+        tax_sub = "מנוכה רק מרווחים חיוביים" if not u["is_manager"] else "פטור דמי ניהול"
+        st.markdown(kpi(tax_title, tax_value, tax_sub, "gold" if c['tax'] > 0 else "green"), unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown(f"""
+    <div style="background: #0a1525; border: 1px dashed #1d3557; border-radius: 10px; padding: 14px; text-align: center; font-size: 0.9rem;" class="muted">
+        🌐 שווי תיק כולל מנוהל ב-RC Capital (מאסטר NAV): <span class="white" style="font-weight:700;">${nav:,.2f}</span>
+    </div>""", unsafe_allow_html=True)
 
 
 # ─── ROUTER ──────────────────────────────────────────────────────────────────
